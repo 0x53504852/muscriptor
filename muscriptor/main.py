@@ -36,23 +36,13 @@ def transcribe(
         help=(
             "Comma-separated list of expected instrument group names "
             "(e.g. 'acoustic_piano,acoustic_guitar,acoustic_bass'). "
-            "Use --list-instruments to see all available names."
+            "Run 'muscriptor list-instruments' to see all available names."
         ),
-    ),
-    list_instruments: bool = typer.Option(
-        False,
-        "--list-instruments",
-        help="Print available instrument group names and exit.",
     ),
 ):
     """Transcribe an audio file to MIDI."""
     from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
     from muscriptor.transcription_model import TranscriptionModel
-
-    if list_instruments:
-        for name, gid in MT3_FULL_PLUS_GROUP_NAMES.items():
-            typer.echo(f"  {gid:2d}  {name}")
-        raise typer.Exit(0)
 
     instrument_group: tp.Optional[str] = None
     if instruments is not None:
@@ -61,7 +51,7 @@ def transcribe(
         if unknown:
             typer.echo(
                 f"Error: unknown instrument name(s): {', '.join(unknown)}. "
-                "Use --list-instruments to see available names.",
+                "Run 'muscriptor list-instruments' to see available names.",
                 err=True,
             )
             raise typer.Exit(1)
@@ -112,7 +102,11 @@ def serve():
 
 @app.command()
 def list_instruments():
-    pass
+    """List the instrument group names accepted by --instruments."""
+    from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
+
+    for name in MT3_FULL_PLUS_GROUP_NAMES:
+        typer.echo(name)
 
 
 def main():
