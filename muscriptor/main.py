@@ -105,6 +105,16 @@ def transcribe(
             )
 
 
+@app.command()
+def serve():
+    pass
+
+
+@app.command()
+def list_instruments():
+    pass
+
+
 def main():
     app()
 
