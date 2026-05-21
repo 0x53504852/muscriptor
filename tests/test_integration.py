@@ -5,6 +5,7 @@ They are slow (model is large) but run on CPU with short audio clips.
 
 Run with: pytest tests/test_integration.py -v
 """
+
 import tempfile
 from pathlib import Path
 
@@ -40,6 +41,7 @@ def song_clip():
     if not SONG_PATH.exists():
         pytest.skip(f"Song not found at {SONG_PATH}")
     from muscriptor.utils.audio import load_audio
+
     wav = load_audio(SONG_PATH, target_sr=_SAMPLE_RATE)
     return wav[:, : _SAMPLE_RATE * _SONG_CLIP_SEC]
 
@@ -47,6 +49,7 @@ def song_clip():
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
+
 
 def test_model_loads(transcription_model):
     assert transcription_model is not None
@@ -66,6 +69,7 @@ def test_model_device_is_cpu(transcription_model):
 # ---------------------------------------------------------------------------
 # _load_wav preprocessing
 # ---------------------------------------------------------------------------
+
 
 def test_load_wav_1d_tensor(transcription_model):
     wav1d = torch.zeros(_SAMPLE_RATE)
@@ -96,6 +100,7 @@ def test_load_wav_resamples(transcription_model):
 # _build_conditions
 # ---------------------------------------------------------------------------
 
+
 def test_build_conditions_structure(transcription_model):
     wav = torch.zeros(1, _SAMPLE_RATE)
     conditions = transcription_model._build_conditions(wav)
@@ -118,19 +123,26 @@ def test_build_conditions_wav_shape(transcription_model):
 # transcribe — return_notes
 # ---------------------------------------------------------------------------
 
+
 def test_transcribe_returns_list(transcription_model, silence):
-    notes = transcription_model.transcribe(silence, sample_rate=_SAMPLE_RATE, return_notes=True)
+    notes = transcription_model.transcribe(
+        silence, sample_rate=_SAMPLE_RATE, return_notes=True
+    )
     assert isinstance(notes, list)
 
 
 def test_transcribe_note_types(transcription_model, noise):
-    notes = transcription_model.transcribe(noise, sample_rate=_SAMPLE_RATE, return_notes=True)
+    notes = transcription_model.transcribe(
+        noise, sample_rate=_SAMPLE_RATE, return_notes=True
+    )
     for note in notes:
         assert isinstance(note, Note)
 
 
 def test_transcribe_note_fields_in_range(transcription_model, noise):
-    notes = transcription_model.transcribe(noise, sample_rate=_SAMPLE_RATE, return_notes=True)
+    notes = transcription_model.transcribe(
+        noise, sample_rate=_SAMPLE_RATE, return_notes=True
+    )
     for note in notes:
         assert 0 <= note.pitch <= 127
         assert 0 <= note.program <= 128  # 128 = drums
@@ -147,19 +159,25 @@ def test_transcribe_returns_none_by_default(transcription_model, silence):
 # transcribe — MIDI output
 # ---------------------------------------------------------------------------
 
+
 def test_transcribe_saves_midi(transcription_model, silence):
     with tempfile.TemporaryDirectory() as tmpdir:
         out = Path(tmpdir) / "out.mid"
-        transcription_model.transcribe(silence, sample_rate=_SAMPLE_RATE, output_midi=out)
+        transcription_model.transcribe(
+            silence, sample_rate=_SAMPLE_RATE, output_midi=out
+        )
         assert out.exists()
         assert out.stat().st_size > 0
 
 
 def test_transcribe_midi_is_valid(transcription_model, silence):
     from mido import MidiFile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         out = Path(tmpdir) / "out.mid"
-        transcription_model.transcribe(silence, sample_rate=_SAMPLE_RATE, output_midi=out)
+        transcription_model.transcribe(
+            silence, sample_rate=_SAMPLE_RATE, output_midi=out
+        )
         midi = MidiFile(str(out))
         assert len(midi.tracks) > 0
 
@@ -168,18 +186,24 @@ def test_transcribe_midi_is_valid(transcription_model, silence):
 # transcribe — sampling vs greedy
 # ---------------------------------------------------------------------------
 
+
 def test_transcribe_greedy(transcription_model, silence):
     notes = transcription_model.transcribe(
-        silence, sample_rate=_SAMPLE_RATE,
-        return_notes=True, use_sampling=False,
+        silence,
+        sample_rate=_SAMPLE_RATE,
+        return_notes=True,
+        use_sampling=False,
     )
     assert isinstance(notes, list)
 
 
 def test_transcribe_sampling(transcription_model, noise):
     notes = transcription_model.transcribe(
-        noise, sample_rate=_SAMPLE_RATE,
-        return_notes=True, use_sampling=True, temperature=1.0,
+        noise,
+        sample_rate=_SAMPLE_RATE,
+        return_notes=True,
+        use_sampling=True,
+        temperature=1.0,
     )
     assert isinstance(notes, list)
 
@@ -187,8 +211,10 @@ def test_transcribe_sampling(transcription_model, noise):
 def test_transcribe_cfg_coef_zero(transcription_model, silence):
     # cfg_coef=0 means no guidance; should still run and return notes
     notes = transcription_model.transcribe(
-        silence, sample_rate=_SAMPLE_RATE,
-        return_notes=True, cfg_coef=0.0,
+        silence,
+        sample_rate=_SAMPLE_RATE,
+        return_notes=True,
+        cfg_coef=0.0,
     )
     assert isinstance(notes, list)
 
@@ -196,6 +222,7 @@ def test_transcribe_cfg_coef_zero(transcription_model, silence):
 # ---------------------------------------------------------------------------
 # Real audio: filling_the_void.wav (first 10 seconds)
 # ---------------------------------------------------------------------------
+
 
 def test_song_clip_shape(song_clip):
     assert song_clip.dim() == 2
@@ -205,7 +232,9 @@ def test_song_clip_shape(song_clip):
 
 def test_transcribe_song_returns_notes(transcription_model, song_clip):
     notes = transcription_model.transcribe(
-        song_clip, sample_rate=_SAMPLE_RATE, return_notes=True,
+        song_clip,
+        sample_rate=_SAMPLE_RATE,
+        return_notes=True,
     )
     assert isinstance(notes, list)
     assert len(notes) > 0, "expected at least some notes from a real song"
@@ -213,7 +242,9 @@ def test_transcribe_song_returns_notes(transcription_model, song_clip):
 
 def test_transcribe_song_note_validity(transcription_model, song_clip):
     notes = transcription_model.transcribe(
-        song_clip, sample_rate=_SAMPLE_RATE, return_notes=True,
+        song_clip,
+        sample_rate=_SAMPLE_RATE,
+        return_notes=True,
     )
     for note in notes:
         assert 0 <= note.pitch <= 127
@@ -224,10 +255,13 @@ def test_transcribe_song_note_validity(transcription_model, song_clip):
 
 def test_transcribe_song_saves_midi(transcription_model, song_clip):
     from mido import MidiFile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         out = Path(tmpdir) / "filling_the_void_10s.mid"
         transcription_model.transcribe(
-            song_clip, sample_rate=_SAMPLE_RATE, output_midi=out,
+            song_clip,
+            sample_rate=_SAMPLE_RATE,
+            output_midi=out,
         )
         assert out.exists()
         midi = MidiFile(str(out))
@@ -239,7 +273,8 @@ def test_transcribe_song_from_file_path(transcription_model):
     if not SONG_PATH.exists():
         pytest.skip(f"Song not found at {SONG_PATH}")
     notes = transcription_model.transcribe(
-        SONG_PATH, return_notes=True,
+        SONG_PATH,
+        return_notes=True,
     )
     assert isinstance(notes, list)
     assert len(notes) > 0

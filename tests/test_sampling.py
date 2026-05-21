@@ -1,5 +1,5 @@
 """Tests for muscriptor/utils/sampling.py."""
-import pytest
+
 import torch
 
 from muscriptor.utils.sampling import (
@@ -15,11 +15,13 @@ def test_length_to_mask_basic():
     lengths = torch.tensor([2, 3, 1])
     mask = length_to_mask(lengths)
     assert mask.shape == (3, 3)
-    expected = torch.tensor([
-        [True, True, False],
-        [True, True, True],
-        [True, False, False],
-    ])
+    expected = torch.tensor(
+        [
+            [True, True, False],
+            [True, True, True],
+            [True, False, False],
+        ]
+    )
     assert torch.equal(mask, expected)
 
 
@@ -55,7 +57,9 @@ def test_sample_top_k_only_top_tokens():
     probs = torch.zeros(1, 10)
     probs[0, :5] = 0.2
     # num_samples must be <= vocab size without replacement; sample 5 times repeatedly
-    results = torch.cat([sample_top_k(probs, k=5, num_samples=1) for _ in range(30)], dim=-1)
+    results = torch.cat(
+        [sample_top_k(probs, k=5, num_samples=1) for _ in range(30)], dim=-1
+    )
     assert (results < 5).all(), "top-k should never sample outside the top-k"
 
 
@@ -84,7 +88,9 @@ def test_sample_stratified_returns_special_when_mass_concentrated():
     logits = torch.full((1, vocab), -10.0)
     logits[0, special] = 10.0
     probs = torch.softmax(logits, dim=-1)
-    results = torch.cat([sample_stratified(probs, special, first_temp=1.0) for _ in range(50)])
+    results = torch.cat(
+        [sample_stratified(probs, special, first_temp=1.0) for _ in range(50)]
+    )
     assert (results == special).all(), "should almost always pick the special token"
 
 

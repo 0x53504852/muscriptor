@@ -16,10 +16,13 @@ from pathlib import Path
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("checkpoint", type=Path, help="Path to the .th checkpoint file")
-    parser.add_argument("output", type=Path, help="Path for the output .safetensors file")
+    parser.add_argument(
+        "output", type=Path, help="Path for the output .safetensors file"
+    )
     args = parser.parse_args()
 
     if not args.checkpoint.exists():
@@ -28,6 +31,7 @@ def main():
 
     print(f"Loading checkpoint from {args.checkpoint} …")
     import torch
+
     pkg = torch.load(args.checkpoint, map_location="cpu")
 
     # The EMA weights live under 'best_state'
@@ -60,11 +64,13 @@ def main():
     print("Saving to safetensors …")
 
     from safetensors.torch import save_file
+
     save_file(clean, str(args.output))
     print(f"Done. Saved to {args.output}")
 
     # Quick sanity check
     from safetensors.torch import load_file
+
     loaded = load_file(str(args.output))
     assert len(loaded) == len(clean), "Tensor count mismatch after round-trip!"
     print("Sanity check passed.")

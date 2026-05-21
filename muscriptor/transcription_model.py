@@ -11,6 +11,20 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
+from muscriptor.models.lm import LMModel, TorchAutocast
+from muscriptor.modules.conditioners import (
+    MelSpectrogramConditioner,
+    ClassConditioner,
+    ConditioningProvider,
+    ConditionFuser,
+    ConditioningAttributes,
+    WavCondition,
+)
+from muscriptor.tokenizer.mt3 import MT3Tokenizer
+from muscriptor.tokenizer.notes import Note
+from muscriptor.utils.audio import load_audio
+from muscriptor.utils.midi import save_midi
+
 
 @contextlib.contextmanager
 def _timed(label: str, store: tp.Optional[tp.List[tp.Tuple[str, float]]] = None):
@@ -26,16 +40,6 @@ def _timed(label: str, store: tp.Optional[tp.List[tp.Tuple[str, float]]] = None)
     if store is not None:
         store.append((label, dt))
 
-from muscriptor.models.lm import LMModel, TorchAutocast
-from muscriptor.modules.conditioners import (
-    MelSpectrogramConditioner, ClassConditioner,
-    ConditioningProvider, ConditionFuser,
-    ConditioningAttributes, WavCondition,
-)
-from muscriptor.tokenizer.mt3 import MT3Tokenizer
-from muscriptor.tokenizer.notes import Note
-from muscriptor.utils.audio import load_audio
-from muscriptor.utils.midi import save_midi
 
 # Placeholder URL — fill in after HuggingFace upload.
 _HF_URL = "https://huggingface.co/kyutai/muscriptor/resolve/main/muscriptor_weights.safetensors"
@@ -56,7 +60,7 @@ class _ModelConfig:
 # Per-checkpoint configs extracted from .hydra/config.yaml → transformer_lm.
 _CONFIGS: tp.Dict[str, _ModelConfig] = {
     "01684fbb": _ModelConfig(dim=1536, num_heads=24, num_layers=48, card=1395),
-    "0ac4ce03": _ModelConfig(dim=768,  num_heads=12, num_layers=14, card=1393),
+    "0ac4ce03": _ModelConfig(dim=768, num_heads=12, num_layers=14, card=1393),
     "8f59580c": _ModelConfig(dim=1024, num_heads=16, num_layers=24, card=1395),
     "e84904c4": _ModelConfig(dim=1536, num_heads=24, num_layers=48, card=1395),
 }
@@ -66,7 +70,7 @@ _DEFAULT_CONFIG = _CONFIGS["01684fbb"]
 
 def _config_for_weights(weights_path: Path) -> _ModelConfig:
     """Infer model config from checkpoint hash embedded in the filename."""
-    m = re.search(r'_([0-9a-f]{8})_', weights_path.name)
+    m = re.search(r"_([0-9a-f]{8})_", weights_path.name)
     if m and m.group(1) in _CONFIGS:
         return _CONFIGS[m.group(1)]
     return _DEFAULT_CONFIG
@@ -74,24 +78,41 @@ def _config_for_weights(weights_path: Path) -> _ModelConfig:
 
 def _build_model(device: torch.device, cfg: _ModelConfig = _DEFAULT_CONFIG) -> LMModel:
     mel_cond = MelSpectrogramConditioner(
-        output_dim=cfg.dim, device=device,
-        sample_rate=_SAMPLE_RATE, n_fft=2048, frame_rate=100,
-        n_mel_bins=512, log_scale=True, eps=1e-6, normalize_audio=False)
+        output_dim=cfg.dim,
+        device=device,
+        sample_rate=_SAMPLE_RATE,
+        n_fft=2048,
+        frame_rate=100,
+        n_mel_bins=512,
+        log_scale=True,
+        eps=1e-6,
+        normalize_audio=False,
+    )
     inst_cond = ClassConditioner(num_classes=1000, output_dim=cfg.dim, device=device)
     ds_cond = ClassConditioner(num_classes=4, output_dim=cfg.dim, device=device)
 
     condition_provider = ConditioningProvider(
-        conditioners={"self_wav": mel_cond, "instrument_group": inst_cond, "dataset_name": ds_cond},
-        device=device)
+        conditioners={
+            "self_wav": mel_cond,
+            "instrument_group": inst_cond,
+            "dataset_name": ds_cond,
+        },
+        device=device,
+    )
 
-    fuser = ConditionFuser(fuse2cond={
-        "prepend": ["self_wav", "instrument_group", "dataset_name"],
-        "cross": [], "sum": [], "input_interpolate": [], "streaming_sum": [],
-    })
+    fuser = ConditionFuser(
+        fuse2cond={
+            "prepend": ["self_wav", "instrument_group", "dataset_name"],
+            "cross": [],
+            "sum": [],
+            "input_interpolate": [],
+            "streaming_sum": [],
+        }
+    )
 
     autocast = None
-    if device.type == 'cuda':
-        autocast = TorchAutocast(enabled=True, device_type='cuda', dtype=torch.float16)
+    if device.type == "cuda":
+        autocast = TorchAutocast(enabled=True, device_type="cuda", dtype=torch.float16)
 
     model = LMModel(
         condition_provider=condition_provider,
@@ -140,10 +161,11 @@ class TranscriptionModel:
         self._device = device
 
     @classmethod
-    def load_model(cls,
-                   weights_path: tp.Optional[tp.Union[str, Path]] = None,
-                   device: tp.Optional[tp.Union[str, torch.device]] = None
-                   ) -> "TranscriptionModel":
+    def load_model(
+        cls,
+        weights_path: tp.Optional[tp.Union[str, Path]] = None,
+        device: tp.Optional[tp.Union[str, torch.device]] = None,
+    ) -> "TranscriptionModel":
         """Load model weights and return a ready-to-use TranscriptionModel.
 
         Args:
@@ -158,6 +180,7 @@ class TranscriptionModel:
 
         if weights_path is None:
             from muscriptor.utils.download import download_if_necessary
+
             weights_path = download_if_necessary(_HF_URL)
 
         weights_path = Path(weights_path)
@@ -165,6 +188,7 @@ class TranscriptionModel:
         model.eval()
 
         from safetensors.torch import load_file
+
         state_dict = load_file(weights_path, device=str(device))
         model.load_state_dict(state_dict)
         model.to(device)
@@ -225,17 +249,21 @@ class TranscriptionModel:
         num_chunks = math.ceil(total_samples / segment_samples)
         max_gen_len = self._tokenizer.get_generation_length(_SEGMENT_DURATION)
         eos_id = self._tokenizer.tokenizer.eos_id
-        print(f"[muscriptor] audio: {total_duration:.1f}s → {num_chunks} chunk(s) of {_SEGMENT_DURATION}s")
+        print(
+            f"[muscriptor] audio: {total_duration:.1f}s → {num_chunks} chunk(s) of {_SEGMENT_DURATION}s"
+        )
 
         with _timed("build conditions", timings):
             all_conditions: tp.List[ConditioningAttributes] = []
             seek_times: tp.List[float] = []
             for i in range(num_chunks):
                 start = i * segment_samples
-                chunk = wav[:, start:start + segment_samples]
+                chunk = wav[:, start : start + segment_samples]
                 if chunk.shape[-1] < segment_samples:
                     chunk = F.pad(chunk, (0, segment_samples - chunk.shape[-1]))
-                all_conditions.append(self._build_conditions(chunk, instrument_group, dataset_name)[0])
+                all_conditions.append(
+                    self._build_conditions(chunk, instrument_group, dataset_name)[0]
+                )
                 seek_times.append(i * _SEGMENT_DURATION)
 
         # Generate in batches of 16 (matching the evaluation solver).
@@ -243,9 +271,12 @@ class TranscriptionModel:
         t_gen = time.perf_counter()
         num_batches = math.ceil(len(all_conditions) / 16)
         for i in range(0, len(all_conditions), 16):
-            batch_conditions = all_conditions[i:i + 16]
+            batch_conditions = all_conditions[i : i + 16]
             batch_idx = i // 16 + 1
-            with _timed(f"generate batch {batch_idx}/{num_batches} ({len(batch_conditions)} chunks)", timings):
+            with _timed(
+                f"generate batch {batch_idx}/{num_batches} ({len(batch_conditions)} chunks)",
+                timings,
+            ):
                 with torch.no_grad():
                     tokens = self._model.generate(
                         conditions=batch_conditions,
@@ -263,7 +294,7 @@ class TranscriptionModel:
                 seq = tokens[j]  # [n_q, T_gen]
                 eos_mask = seq[0] == eos_id
                 if eos_mask.any():
-                    seq = seq[:, :eos_mask.int().argmax().item() + 1]
+                    seq = seq[:, : eos_mask.int().argmax().item() + 1]
                 all_tokens.append(seq)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -271,7 +302,10 @@ class TranscriptionModel:
 
         with _timed("decode tokens → notes", timings):
             notes_dict, _ = self._tokenizer.decode_segmented_track(
-                all_tokens, seek_times, total_duration, _SEGMENT_DURATION,
+                all_tokens,
+                seek_times,
+                total_duration,
+                _SEGMENT_DURATION,
             )
         notes: tp.List[Note] = notes_dict["notes"]
 
@@ -279,17 +313,19 @@ class TranscriptionModel:
             with _timed("save MIDI", timings):
                 save_midi(notes, output_midi)
 
-        print(f"[muscriptor] transcribe total: {time.perf_counter() - t_total:.2f}s "
-              f"({len(notes)} notes, {total_duration:.1f}s audio)")
+        print(
+            f"[muscriptor] transcribe total: {time.perf_counter() - t_total:.2f}s "
+            f"({len(notes)} notes, {total_duration:.1f}s audio)"
+        )
 
         if return_notes:
             return notes
         return None
 
     # ------------------------------------------------------------------
-    def _load_wav(self,
-                  audio: tp.Union[str, Path, torch.Tensor],
-                  sample_rate: tp.Optional[int]) -> torch.Tensor:
+    def _load_wav(
+        self, audio: tp.Union[str, Path, torch.Tensor], sample_rate: tp.Optional[int]
+    ) -> torch.Tensor:
         """Return mono float32 waveform at 16 kHz, shape [1, T]."""
         if isinstance(audio, (str, Path)):
             wav = load_audio(audio, target_sr=_SAMPLE_RATE)
@@ -303,11 +339,16 @@ class TranscriptionModel:
                 wav = wav.mean(0, keepdim=True)
             if sample_rate is not None and sample_rate != _SAMPLE_RATE:
                 import torchaudio
+
                 wav = torchaudio.transforms.Resample(sample_rate, _SAMPLE_RATE)(wav)
         return wav.to(self._device)
 
-    def _build_conditions(self, wav: torch.Tensor, instrument_group: tp.Optional[str] = None, 
-                          dataset_name: tp.Optional[str] = None) -> tp.List[ConditioningAttributes]:
+    def _build_conditions(
+        self,
+        wav: torch.Tensor,
+        instrument_group: tp.Optional[str] = None,
+        dataset_name: tp.Optional[str] = None,
+    ) -> tp.List[ConditioningAttributes]:
         """Build a single-element list of ConditioningAttributes for one 5-second chunk."""
         T = wav.shape[-1]
         wav_3d = wav.unsqueeze(0)  # [1, 1, T]
@@ -319,7 +360,12 @@ class TranscriptionModel:
             path=[None],
             seek_time=[0.0],
         )
-        return [ConditioningAttributes(
-            wav={"self_wav": wav_cond},
-            text={"instrument_group": instrument_group, "dataset_name": dataset_name},
-        )]
+        return [
+            ConditioningAttributes(
+                wav={"self_wav": wav_cond},
+                text={
+                    "instrument_group": instrument_group,
+                    "dataset_name": dataset_name,
+                },
+            )
+        ]

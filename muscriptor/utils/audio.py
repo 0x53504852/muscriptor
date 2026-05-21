@@ -1,4 +1,5 @@
 """Audio loading utility."""
+
 import typing as tp
 from pathlib import Path
 
@@ -7,8 +8,8 @@ import torchaudio
 
 
 def _load_with_soundfile(path: str) -> tp.Tuple[torch.Tensor, int]:
-    import numpy as np
     import soundfile as sf
+
     data, sr = sf.read(path, dtype="float32", always_2d=True)
     wav = torch.from_numpy(data.T)  # [C, T]
     return wav, sr

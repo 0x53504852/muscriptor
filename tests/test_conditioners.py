@@ -1,5 +1,5 @@
 """Tests for muscriptor/modules/conditioners.py — CPU only."""
-import pytest
+
 import torch
 
 from muscriptor.modules.conditioners import (
@@ -10,7 +10,6 @@ from muscriptor.modules.conditioners import (
     MelSpectrogramConditioner,
     ClassConditioner,
     ClassifierFreeGuidanceDropout,
-    AttributeDropout,
     nullify_condition,
     nullify_wav,
 )
@@ -19,6 +18,7 @@ from muscriptor.modules.conditioners import (
 # ---------------------------------------------------------------------------
 # ConditioningAttributes
 # ---------------------------------------------------------------------------
+
 
 def test_conditioning_attributes_defaults():
     ca = ConditioningAttributes()
@@ -49,6 +49,7 @@ def test_conditioning_attributes_properties():
 # nullify_condition / nullify_wav
 # ---------------------------------------------------------------------------
 
+
 def test_nullify_condition_zeros_embedding():
     # nullify_condition collapses the time dim to 1 and zeros the values
     embed = torch.randn(2, 5, 8)
@@ -73,6 +74,7 @@ def test_nullify_wav_zeros_waveform():
 # ---------------------------------------------------------------------------
 # MelSpectrogramConditioner
 # ---------------------------------------------------------------------------
+
 
 def _make_mel_conditioner(output_dim=32):
     return MelSpectrogramConditioner(
@@ -115,8 +117,11 @@ def test_mel_conditioner_mask_dtype():
 # ClassConditioner
 # ---------------------------------------------------------------------------
 
+
 def _make_class_conditioner(num_classes=10, output_dim=16):
-    return ClassConditioner(num_classes=num_classes, output_dim=output_dim, device="cpu")
+    return ClassConditioner(
+        num_classes=num_classes, output_dim=output_dim, device="cpu"
+    )
 
 
 def test_class_conditioner_output_shape():
@@ -138,6 +143,7 @@ def test_class_conditioner_none_input():
 # ConditioningProvider
 # ---------------------------------------------------------------------------
 
+
 def test_conditioning_provider_tokenize_and_forward():
     mel = _make_mel_conditioner(output_dim=16)
     provider = ConditioningProvider({"audio": mel}, device="cpu")
@@ -158,6 +164,7 @@ def test_conditioning_provider_tokenize_and_forward():
 # ---------------------------------------------------------------------------
 # ClassifierFreeGuidanceDropout
 # ---------------------------------------------------------------------------
+
 
 def test_cfg_dropout_null_all_conditions():
     dropout = ClassifierFreeGuidanceDropout(p=1.0)
@@ -187,6 +194,7 @@ def test_cfg_dropout_p_zero_keeps_conditions():
 # ---------------------------------------------------------------------------
 # ConditionFuser
 # ---------------------------------------------------------------------------
+
 
 def test_condition_fuser_prepend():
     fuser = ConditionFuser(fuse2cond={"prepend": ["mel"]})

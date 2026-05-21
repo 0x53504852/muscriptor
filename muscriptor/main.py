@@ -1,6 +1,5 @@
 """CLI for muscriptor: audio → MIDI transcription."""
 
-import sys
 from pathlib import Path
 import typing as tp
 
@@ -13,21 +12,27 @@ app = typer.Typer(add_completion=False, help="muscriptor — audio-to-MIDI trans
 def transcribe(
     audio_file: Path = typer.Argument(..., help="Input audio file (wav, mp3, flac, …)"),
     output: tp.Optional[Path] = typer.Option(
-        None, "--output", "-o", help="Output MIDI file path (default: <audio_file>.mid)"),
-    notes: bool = typer.Option(
-        False, "--notes", help="Print decoded notes to stdout"),
+        None, "--output", "-o", help="Output MIDI file path (default: <audio_file>.mid)"
+    ),
+    notes: bool = typer.Option(False, "--notes", help="Print decoded notes to stdout"),
     sampling: bool = typer.Option(
-        False, "--sampling", help="Use temperature sampling instead of greedy decoding"),
+        False, "--sampling", help="Use temperature sampling instead of greedy decoding"
+    ),
     temperature: float = typer.Option(
-        1.0, "--temperature", "-t", help="Sampling temperature (only with --sampling)"),
+        1.0, "--temperature", "-t", help="Sampling temperature (only with --sampling)"
+    ),
     cfg_coef: float = typer.Option(
-        2.0, "--cfg-coef", help="Classifier-free guidance coefficient"),
+        2.0, "--cfg-coef", help="Classifier-free guidance coefficient"
+    ),
     model_path: tp.Optional[Path] = typer.Option(
-        None, "--model", "-m", help="Path to safetensors weights file"),
+        None, "--model", "-m", help="Path to safetensors weights file"
+    ),
     device: str = typer.Option(
-        "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"),
+        "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
+    ),
     instruments: tp.Optional[str] = typer.Option(
-        None, "--instruments",
+        None,
+        "--instruments",
         help=(
             "Comma-separated list of expected instrument group names "
             "(e.g. 'acoustic_piano,acoustic_guitar,acoustic_bass'). "
@@ -35,8 +40,10 @@ def transcribe(
         ),
     ),
     list_instruments: bool = typer.Option(
-        False, "--list-instruments",
-        help="Print available instrument group names and exit."),
+        False,
+        "--list-instruments",
+        help="Print available instrument group names and exit.",
+    ),
 ):
     """Transcribe an audio file to MIDI."""
     from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
@@ -69,7 +76,7 @@ def transcribe(
 
     _device = None if device == "auto" else device
 
-    typer.echo(f"Loading model…")
+    typer.echo("Loading model…")
     model = TranscriptionModel.load_model(
         weights_path=model_path,
         device=_device,

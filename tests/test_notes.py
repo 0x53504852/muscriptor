@@ -1,4 +1,5 @@
 """Tests for muscriptor/tokenizer/notes.py."""
+
 import pytest
 
 from muscriptor.tokenizer.notes import (
@@ -6,7 +7,6 @@ from muscriptor.tokenizer.notes import (
     MINIMUM_NOTE_DURATION_SEC,
     Note,
     NoteEvent,
-    TieNoteEvent,
     Event,
     EventTokenizer,
     NoteEventTokenizer,
@@ -24,6 +24,7 @@ from muscriptor.tokenizer.notes import (
 # ---------------------------------------------------------------------------
 # Sorting
 # ---------------------------------------------------------------------------
+
 
 def test_sort_notes_by_onset():
     notes = [
@@ -51,6 +52,7 @@ def test_sort_note_events_by_time():
 # validate_notes
 # ---------------------------------------------------------------------------
 
+
 def test_validate_notes_fixes_short_duration():
     note = Note(False, 0, 1.0, 1.001, 60, 1)  # offset - onset < 0.01
     result = validate_notes([note], fix=True)
@@ -72,6 +74,7 @@ def test_validate_notes_removes_none_onset():
 # ---------------------------------------------------------------------------
 # trim_overlapping_notes
 # ---------------------------------------------------------------------------
+
 
 def test_trim_overlapping_notes_no_overlap():
     notes = [
@@ -106,8 +109,9 @@ def test_trim_overlapping_notes_different_pitch():
 # EventTokenizer
 # ---------------------------------------------------------------------------
 
+
 def _make_event_tokenizer():
-    return EventTokenizer(special_tokens=['PAD', 'EOS', 'UNK'], max_shift_steps=206)
+    return EventTokenizer(special_tokens=["PAD", "EOS", "UNK"], max_shift_steps=206)
 
 
 def test_event_tokenizer_num_tokens():
@@ -119,17 +123,17 @@ def test_event_tokenizer_num_tokens():
 def test_event_tokenizer_roundtrip_shift():
     et = _make_event_tokenizer()
     for value in [0, 50, 100, 205]:
-        event = Event('shift', value)
+        event = Event("shift", value)
         idx = et.encode_event(event)
         decoded = et.decode_event_index(idx)
-        assert decoded.type == 'shift'
+        assert decoded.type == "shift"
         assert decoded.value == value
 
 
 def test_event_tokenizer_roundtrip_pitch():
     et = _make_event_tokenizer()
     for pitch in [0, 60, 127]:
-        event = Event('pitch', pitch)
+        event = Event("pitch", pitch)
         idx = et.encode_event(event)
         decoded = et.decode_event_index(idx)
         assert decoded == event
@@ -138,21 +142,21 @@ def test_event_tokenizer_roundtrip_pitch():
 def test_event_tokenizer_roundtrip_velocity():
     et = _make_event_tokenizer()
     for vel in [0, 1]:
-        event = Event('velocity', vel)
+        event = Event("velocity", vel)
         idx = et.encode_event(event)
         assert et.decode_event_index(idx) == event
 
 
 def test_event_tokenizer_roundtrip_program():
     et = _make_event_tokenizer()
-    event = Event('program', 0)
+    event = Event("program", 0)
     idx = et.encode_event(event)
     assert et.decode_event_index(idx) == event
 
 
 def test_event_tokenizer_roundtrip_drum():
     et = _make_event_tokenizer()
-    event = Event('drum', 36)
+    event = Event("drum", 36)
     idx = et.encode_event(event)
     assert et.decode_event_index(idx) == event
 
@@ -160,7 +164,7 @@ def test_event_tokenizer_roundtrip_drum():
 def test_event_tokenizer_unknown_type_raises():
     et = _make_event_tokenizer()
     with pytest.raises((ValueError, KeyError)):
-        et.encode_event(Event('bad_type', 0))
+        et.encode_event(Event("bad_type", 0))
 
 
 def test_event_tokenizer_out_of_range_index_raises():
@@ -173,6 +177,7 @@ def test_event_tokenizer_out_of_range_index_raises():
 # note_event2event / event2note_event roundtrip
 # ---------------------------------------------------------------------------
 
+
 def _simple_piano_note_events():
     """Onset at 0.10s, offset at 0.20s for middle C on piano."""
     return [
@@ -184,12 +189,12 @@ def _simple_piano_note_events():
 def test_note_event2event_produces_tie():
     evs = note_event2event(_simple_piano_note_events())
     types = [e.type for e in evs]
-    assert 'tie' in types
+    assert "tie" in types
 
 
 def test_note_event2event_shift_correct():
     evs = note_event2event(_simple_piano_note_events(), frame_rate=100)
-    shift_values = [e.value for e in evs if e.type == 'shift']
+    shift_values = [e.value for e in evs if e.type == "shift"]
     # onset at frame 10 from start 0 → shift 10; offset at frame 20 → shift 20
     assert 10 in shift_values
     assert 20 in shift_values
@@ -198,7 +203,9 @@ def test_note_event2event_shift_correct():
 def test_event_roundtrip_piano_note():
     note_events = _simple_piano_note_events()
     events = note_event2event(note_events, frame_rate=100)
-    recovered_ne, recovered_tie, _, err = event2note_event(events, start_time=0.0, frame_rate=100)
+    recovered_ne, recovered_tie, _, err = event2note_event(
+        events, start_time=0.0, frame_rate=100
+    )
     assert not err
     assert len(recovered_tie) == 0
     times = {(ne.velocity, ne.pitch): ne.time for ne in recovered_ne}
@@ -207,7 +214,9 @@ def test_event_roundtrip_piano_note():
 
 
 def test_event_roundtrip_drum_note():
-    note_events = [NoteEvent(is_drum=True, program=DRUM_PROGRAM, time=0.05, velocity=1, pitch=36)]
+    note_events = [
+        NoteEvent(is_drum=True, program=DRUM_PROGRAM, time=0.05, velocity=1, pitch=36)
+    ]
     events = note_event2event(note_events, frame_rate=100)
     recovered_ne, _, _, err = event2note_event(events, start_time=0.0, frame_rate=100)
     assert not err
@@ -220,13 +229,14 @@ def test_event_roundtrip_drum_note():
 # NoteEventTokenizer
 # ---------------------------------------------------------------------------
 
+
 def _make_tokenizer():
     return NoteEventTokenizer(max_length=1024, frame_rate=100, max_shift_steps=206)
 
 
 def test_note_event_tokenizer_num_tokens():
     tok = _make_tokenizer()
-    et = EventTokenizer(special_tokens=['PAD', 'EOS', 'UNK'], max_shift_steps=206)
+    et = EventTokenizer(special_tokens=["PAD", "EOS", "UNK"], max_shift_steps=206)
     assert tok.num_tokens == et.num_tokens
 
 
@@ -267,6 +277,7 @@ def test_note_event_tokenizer_encode_decode_multi_note():
 # note_event2note / note2note_event
 # ---------------------------------------------------------------------------
 
+
 def test_note_event2note_basic():
     note_events = _simple_piano_note_events()
     notes, err = note_event2note(note_events)
@@ -289,7 +300,9 @@ def test_note2note_event_roundtrip():
 
 
 def test_note_event2note_drum():
-    note_events = [NoteEvent(is_drum=True, program=DRUM_PROGRAM, time=0.05, velocity=1, pitch=36)]
+    note_events = [
+        NoteEvent(is_drum=True, program=DRUM_PROGRAM, time=0.05, velocity=1, pitch=36)
+    ]
     notes, err = note_event2note(note_events)
     assert not err
     assert len(notes) == 1

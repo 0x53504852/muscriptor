@@ -1,8 +1,8 @@
 """Tests for muscriptor/utils/midi.py."""
+
 import tempfile
 from pathlib import Path
 
-import pytest
 from mido import MidiFile
 
 from muscriptor.tokenizer.notes import Note

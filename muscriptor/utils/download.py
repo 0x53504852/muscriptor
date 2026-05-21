@@ -1,5 +1,5 @@
 """Weight download utility with caching in ~/.cache/muscriptor/."""
-import hashlib
+
 import typing as tp
 from pathlib import Path
 
@@ -41,12 +41,17 @@ def download_if_necessary(url: str, filename: tp.Optional[str] = None) -> Path:
             rev_and_file = parts[1].split("/", 1)
             revision = rev_and_file[0]
             hf_filename = rev_and_file[1] if len(rev_and_file) > 1 else filename
-            cached = hf_hub_download(repo_id=repo_id, filename=hf_filename,
-                                     revision=revision, cache_dir=str(_CACHE_DIR))
+            cached = hf_hub_download(
+                repo_id=repo_id,
+                filename=hf_filename,
+                revision=revision,
+                cache_dir=str(_CACHE_DIR),
+            )
             return Path(cached)
 
     # Generic download fallback
     import urllib.request
+
     print(f"Downloading {filename} …")
     urllib.request.urlretrieve(url, dest)
     return dest

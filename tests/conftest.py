@@ -1,8 +1,11 @@
 """Shared fixtures for muscriptor tests."""
+
 import pytest
 from pathlib import Path
 
-WEIGHTS_PATH = Path(__file__).parent.parent / "muscriptor_weights_01684fbb_350.safetensors"
+WEIGHTS_PATH = (
+    Path(__file__).parent.parent / "muscriptor_weights_01684fbb_350.safetensors"
+)
 SONG_PATH = Path("/home/simon/audio/filling_the_void.wav")
 
 
@@ -16,4 +19,5 @@ def transcription_model():
     if not WEIGHTS_PATH.exists():
         pytest.skip(f"Weights not found at {WEIGHTS_PATH}")
     from muscriptor.transcription_model import TranscriptionModel
+
     return TranscriptionModel.load_model(weights_path=WEIGHTS_PATH, device="cpu")

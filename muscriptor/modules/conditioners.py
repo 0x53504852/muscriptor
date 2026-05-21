@@ -11,7 +11,6 @@ Contains only the classes needed to run the transcription model:
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
-from itertools import chain
 import typing as tp
 
 import torch
@@ -23,7 +22,9 @@ from muscriptor.modules.streaming import StreamingModule
 from muscriptor.modules.transformer import create_sin_embedding
 from muscriptor.utils.sampling import length_to_mask
 
-ConditionType = tp.Tuple[torch.Tensor, torch.Tensor]  # (embedding [B, T, D], mask [B, T])
+ConditionType = tp.Tuple[
+    torch.Tensor, torch.Tensor
+]  # (embedding [B, T, D], mask [B, T])
 
 
 class WavCondition(tp.NamedTuple):
@@ -80,14 +81,16 @@ def nullify_condition(condition: ConditionType, dim: int = 1) -> ConditionType:
     B = cond.shape[0]
     last_dim = cond.dim() - 1
     out = cond.transpose(dim, last_dim)
-    out = 0. * out[..., :1]
+    out = 0.0 * out[..., :1]
     out = out.transpose(dim, last_dim)
     mask = torch.zeros((B, 1), device=out.device).int()
     return out, mask
 
 
 def nullify_wav(cond: WavCondition) -> WavCondition:
-    null_wav, _ = nullify_condition((cond.wav, torch.zeros_like(cond.wav)), dim=cond.wav.dim() - 1)
+    null_wav, _ = nullify_condition(
+        (cond.wav, torch.zeros_like(cond.wav)), dim=cond.wav.dim() - 1
+    )
     return WavCondition(
         wav=null_wav,
         length=torch.tensor([0] * cond.wav.shape[0], device=cond.wav.device),
@@ -97,8 +100,10 @@ def nullify_wav(cond: WavCondition) -> WavCondition:
     )
 
 
-def dropout_condition_(sample: ConditioningAttributes, condition_type: str, condition: str) -> None:
-    if condition_type == 'wav':
+def dropout_condition_(
+    sample: ConditioningAttributes, condition_type: str, condition: str
+) -> None:
+    if condition_type == "wav":
         wav_cond = sample.wav[condition]
         sample.wav[condition] = nullify_wav(wav_cond)
     else:
@@ -120,13 +125,17 @@ class BaseConditioner(nn.Module):
         raise NotImplementedError()
 
 
-class TextConditioner(BaseConditioner):
-    ...
+class TextConditioner(BaseConditioner): ...
 
 
 class WaveformConditioner(BaseConditioner):
-    def __init__(self, dim: int, output_dim: int, device: tp.Union[torch.device, str],
-                 use_null_embedding: bool = False):
+    def __init__(
+        self,
+        dim: int,
+        output_dim: int,
+        device: tp.Union[torch.device, str],
+        use_null_embedding: bool = False,
+    ):
         super().__init__(dim, output_dim)
         self.device = device
         self._use_masking = True
@@ -140,7 +149,9 @@ class WaveformConditioner(BaseConditioner):
     def tokenize(self, x: WavCondition) -> WavCondition:
         wav, length, sample_rate, path, seek_time = x
         assert length is not None
-        return WavCondition(wav.to(self.device), length.to(self.device), sample_rate, path, seek_time)
+        return WavCondition(
+            wav.to(self.device), length.to(self.device), sample_rate, path, seek_time
+        )
 
     def _get_wav_embedding(self, x: WavCondition) -> torch.Tensor:
         raise NotImplementedError()
@@ -152,7 +163,7 @@ class WaveformConditioner(BaseConditioner):
         wav, lengths, *_ = x
         with torch.no_grad():
             embeds = self._get_wav_embedding(x)
-        if hasattr(self, 'output_proj'):
+        if hasattr(self, "output_proj"):
             embeds = embeds.to(self.output_proj.weight)
             embeds = self.output_proj(embeds)
 
@@ -171,15 +182,27 @@ class WaveformConditioner(BaseConditioner):
 
 class MelSpectrogramConditioner(WaveformConditioner):
     """Log mel spectrogram conditioner. Projects mel bins to transformer dim."""
-    def __init__(self, output_dim: int, device: tp.Union[torch.device, str],
-                 sample_rate: int, n_fft: int = 2048, frame_rate: int = 100,
-                 n_mel_bins: int = 512, normalize_audio: bool = False,
-                 log_scale: bool = True, eps: float = 1e-6,
-                 # unused args kept for config compatibility
-                 filter_drums: bool = False, concat_real_im: bool = False,
-                 separate_stems: bool = False, fine_frame_rate: int = None,
-                 use_null_embedding: bool = False):
+
+    def __init__(
+        self,
+        output_dim: int,
+        device: tp.Union[torch.device, str],
+        sample_rate: int,
+        n_fft: int = 2048,
+        frame_rate: int = 100,
+        n_mel_bins: int = 512,
+        normalize_audio: bool = False,
+        log_scale: bool = True,
+        eps: float = 1e-6,
+        # unused args kept for config compatibility
+        filter_drums: bool = False,
+        concat_real_im: bool = False,
+        separate_stems: bool = False,
+        fine_frame_rate: int = None,
+        use_null_embedding: bool = False,
+    ):
         import torchaudio
+
         assert not filter_drums, "filter_drums not supported"
         assert not concat_real_im, "concat_real_im not supported"
         assert not separate_stems, "separate_stems not supported"
@@ -190,8 +213,12 @@ class MelSpectrogramConditioner(WaveformConditioner):
             self.fine_frame_rate_ratio = fine_frame_rate // frame_rate
 
         dim = n_mel_bins * self.fine_frame_rate_ratio
-        super().__init__(dim=dim, output_dim=output_dim, device=device,
-                         use_null_embedding=use_null_embedding)
+        super().__init__(
+            dim=dim,
+            output_dim=output_dim,
+            device=device,
+            use_null_embedding=use_null_embedding,
+        )
         self.sample_rate = sample_rate
         self.frame_rate = frame_rate
         self.normalize_audio = normalize_audio
@@ -222,6 +249,7 @@ class MelSpectrogramConditioner(WaveformConditioner):
         if x.wav.shape[-1] == 1:
             return torch.zeros(x.wav.shape[0], 1, self.dim, device=self.device)
         import time
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         t0 = time.perf_counter()
@@ -230,22 +258,31 @@ class MelSpectrogramConditioner(WaveformConditioner):
             if self.normalize_audio:
                 wav = wav / (wav.abs().max(dim=-1, keepdim=True).values + 1e-8)
             mel = self.mel_spec_transform(wav)
-            mel = rearrange(mel, 'b 1 d t -> b t d')
+            mel = rearrange(mel, "b 1 d t -> b t d")
             if self.fine_frame_rate_ratio > 1:
-                mel = rearrange(mel[:, :-1], 'b (t f) d -> b t (f d)', f=self.fine_frame_rate_ratio)
+                mel = rearrange(
+                    mel[:, :-1], "b (t f) d -> b t (f d)", f=self.fine_frame_rate_ratio
+                )
             if self.log_scale:
                 mel = torch.log(mel + self.eps)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        print(f"[muscriptor] mel-spec ({wav.shape[0]} × {wav.shape[-1]} samples): "
-              f"{time.perf_counter() - t0:.3f}s")
+        print(
+            f"[muscriptor] mel-spec ({wav.shape[0]} × {wav.shape[-1]} samples): "
+            f"{time.perf_counter() - t0:.3f}s"
+        )
         return mel
 
 
 class ClassConditioner(TextConditioner):
     """Conditioner that embeds class indices (e.g., instrument group, dataset name)."""
-    def __init__(self, num_classes: int, output_dim: int,
-                 device: tp.Union[torch.device, str] = 'cpu'):
+
+    def __init__(
+        self,
+        num_classes: int,
+        output_dim: int,
+        device: tp.Union[torch.device, str] = "cpu",
+    ):
         super().__init__(output_dim, -1)
         self.device = device
         self.embed = nn.Embedding(num_classes + 1, output_dim).to(device)
@@ -273,12 +310,20 @@ class DropoutModule(nn.Module):
 
 class AttributeDropout(DropoutModule):
     """Per-attribute dropout (inactive at eval time by default)."""
-    def __init__(self, dropouts: tp.Dict[str, float], active_on_eval: bool = False, seed: int = 1234):
+
+    def __init__(
+        self,
+        dropouts: tp.Dict[str, float],
+        active_on_eval: bool = False,
+        seed: int = 1234,
+    ):
         super().__init__(seed=seed)
         self.active_on_eval = active_on_eval
         self.dropouts = dropouts
 
-    def forward(self, condition_attributes_batch: tp.List[ConditioningAttributes]) -> tp.List[ConditioningAttributes]:
+    def forward(
+        self, condition_attributes_batch: tp.List[ConditioningAttributes]
+    ) -> tp.List[ConditioningAttributes]:
         if not self.training and not self.active_on_eval:
             return condition_attributes_batch
 
@@ -287,20 +332,29 @@ class AttributeDropout(DropoutModule):
             for condition_type in ConditioningAttributes.condition_types():
                 for condition in getattr(condition_attributes, condition_type):
                     if condition in self.dropouts:
-                        if torch.rand(1, generator=self.rng).item() < self.dropouts[condition]:
-                            dropout_condition_(condition_attributes, condition_type, condition)
+                        if (
+                            torch.rand(1, generator=self.rng).item()
+                            < self.dropouts[condition]
+                        ):
+                            dropout_condition_(
+                                condition_attributes, condition_type, condition
+                            )
         return condition_attributes_batch
 
 
 class ClassifierFreeGuidanceDropout(DropoutModule):
     """CFG dropout — drops all conditions with probability p (only active during training)."""
+
     def __init__(self, p: float, seed: int = 1234):
         super().__init__(seed=seed)
         self.p = p
 
-    def forward(self, samples: tp.List[ConditioningAttributes],
-                cond_types: tp.List[str] = ["wav", "text"],
-                **kwargs) -> tp.List[ConditioningAttributes]:
+    def forward(
+        self,
+        samples: tp.List[ConditioningAttributes],
+        cond_types: tp.List[str] = ["wav", "text"],
+        **kwargs,
+    ) -> tp.List[ConditioningAttributes]:
         if not self.training:
             return samples
 
@@ -316,8 +370,9 @@ class ClassifierFreeGuidanceDropout(DropoutModule):
         return samples
 
 
-def collate_wavs(samples: tp.List[ConditioningAttributes],
-                 wav_conditions: tp.List[str]) -> tp.Dict[str, WavCondition]:
+def collate_wavs(
+    samples: tp.List[ConditioningAttributes], wav_conditions: tp.List[str]
+) -> tp.Dict[str, WavCondition]:
     """Collate wav conditions from a list of ConditioningAttributes."""
     wavs = defaultdict(list)
     lengths = defaultdict(list)
@@ -344,31 +399,44 @@ def collate_wavs(samples: tp.List[ConditioningAttributes],
         # Stack along batch dim
         all_wavs = wavs[attribute]
         max_len = max(w.shape[-1] for w in all_wavs)
-        padded = torch.cat([
-            F.pad(w, (0, max_len - w.shape[-1])) for w in all_wavs
-        ], dim=0)
+        padded = torch.cat(
+            [F.pad(w, (0, max_len - w.shape[-1])) for w in all_wavs], dim=0
+        )
         out[attribute] = WavCondition(
-            padded, torch.cat(lengths[attribute]),
-            sample_rates[attribute], paths[attribute], seek_times[attribute],
+            padded,
+            torch.cat(lengths[attribute]),
+            sample_rates[attribute],
+            paths[attribute],
+            seek_times[attribute],
         )
     return out
 
 
 class ConditioningProvider(nn.Module):
     """Runs all conditioners and returns a dict of condition tensors."""
-    def __init__(self, conditioners: tp.Dict[str, BaseConditioner],
-                 device: tp.Union[torch.device, str] = "cpu"):
+
+    def __init__(
+        self,
+        conditioners: tp.Dict[str, BaseConditioner],
+        device: tp.Union[torch.device, str] = "cpu",
+    ):
         super().__init__()
         self.device = device
         self.conditioners = nn.ModuleDict(conditioners)
 
     @property
     def text_conditions(self):
-        return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
+        return [
+            k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)
+        ]
 
     @property
     def wav_conditions(self):
-        return [k for k, v in self.conditioners.items() if isinstance(v, WaveformConditioner)]
+        return [
+            k
+            for k, v in self.conditioners.items()
+            if isinstance(v, WaveformConditioner)
+        ]
 
     def tokenize(self, inputs: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.Any]:
         output = {}
@@ -398,10 +466,23 @@ class ConditioningProvider(nn.Module):
 
 class ConditionFuser(StreamingModule):
     """Fuses conditions into the transformer input (supports prepend, sum, cross modes)."""
-    FUSING_METHODS = ["sum", "prepend", "cross", "ignore", "input_interpolate", "streaming_sum"]
 
-    def __init__(self, fuse2cond: tp.Dict[str, tp.List[str]], cross_attention_pos_emb: bool = False,
-                 cross_attention_pos_emb_scale: float = 1.0, prepend_cond_pos_emb_scale: float = 0.0):
+    FUSING_METHODS = [
+        "sum",
+        "prepend",
+        "cross",
+        "ignore",
+        "input_interpolate",
+        "streaming_sum",
+    ]
+
+    def __init__(
+        self,
+        fuse2cond: tp.Dict[str, tp.List[str]],
+        cross_attention_pos_emb: bool = False,
+        cross_attention_pos_emb_scale: float = 1.0,
+        prepend_cond_pos_emb_scale: float = 0.0,
+    ):
         super().__init__()
         assert all([k in self.FUSING_METHODS for k in fuse2cond.keys()])
         self.cross_attention_pos_emb = cross_attention_pos_emb
@@ -413,14 +494,14 @@ class ConditionFuser(StreamingModule):
             for condition in conditions:
                 self.cond2fuse[condition] = fuse_method
 
-    def forward(self, input: torch.Tensor,
-                conditions: tp.Dict[str, ConditionType]
-                ) -> tp.Tuple[torch.Tensor, tp.Optional[torch.Tensor], int]:
+    def forward(
+        self, input: torch.Tensor, conditions: tp.Dict[str, ConditionType]
+    ) -> tp.Tuple[torch.Tensor, tp.Optional[torch.Tensor], int]:
         B, T, _ = input.shape
 
-        if 'offsets' in self._streaming_state:
+        if "offsets" in self._streaming_state:
             first_step = False
-            offsets = self._streaming_state['offsets']
+            offsets = self._streaming_state["offsets"]
         else:
             first_step = True
             offsets = torch.zeros(input.shape[0], dtype=torch.long, device=input.device)
@@ -429,33 +510,40 @@ class ConditionFuser(StreamingModule):
         cross_attention_output = None
         for cond_type, (cond, cond_mask) in conditions.items():
             op = self.cond2fuse[cond_type]
-            if op == 'sum':
+            if op == "sum":
                 input = input + cond
-            elif op == 'streaming_sum':
+            elif op == "streaming_sum":
                 zero_frame = torch.zeros(B, 1, cond.shape[-1]).to(cond.device)
                 if offset >= cond.shape[1]:
                     input = input + zero_frame
                 else:
                     if offset + T > cond.shape[1]:
-                        cond = torch.cat([cond, zero_frame.repeat(1, offset + T - cond.shape[1], 1)], dim=1)
-                    input = input + cond[:, offset: offset + T]
-            elif op == 'input_interpolate':
+                        cond = torch.cat(
+                            [cond, zero_frame.repeat(1, offset + T - cond.shape[1], 1)],
+                            dim=1,
+                        )
+                    input = input + cond[:, offset : offset + T]
+            elif op == "input_interpolate":
                 cond = cond.permute(0, 2, 1)
                 cond = F.interpolate(cond, size=input.shape[1])
                 input = input + cond.permute(0, 2, 1)
-            elif op == 'prepend':
+            elif op == "prepend":
                 if first_step:
                     if self.prepend_cond_pos_emb_scale:
-                        positions = torch.arange(cond.shape[1], device=cond.device).view(1, -1, 1)
+                        positions = torch.arange(
+                            cond.shape[1], device=cond.device
+                        ).view(1, -1, 1)
                         pos_emb = create_sin_embedding(positions, cond.shape[-1])
                         cond = cond + self.prepend_cond_pos_emb_scale * pos_emb
                     input = torch.cat([cond, input], dim=1)
-            elif op == 'cross':
+            elif op == "cross":
                 if cross_attention_output is not None:
-                    cross_attention_output = torch.cat([cross_attention_output, cond], dim=1)
+                    cross_attention_output = torch.cat(
+                        [cross_attention_output, cond], dim=1
+                    )
                 else:
                     cross_attention_output = cond
-            elif op == 'ignore':
+            elif op == "ignore":
                 continue
             else:
                 raise ValueError(f"unknown op ({op})")
@@ -464,11 +552,14 @@ class ConditionFuser(StreamingModule):
 
         if self.cross_attention_pos_emb and cross_attention_output is not None:
             positions = torch.arange(
-                cross_attention_output.shape[1], device=cross_attention_output.device).view(1, -1, 1)
+                cross_attention_output.shape[1], device=cross_attention_output.device
+            ).view(1, -1, 1)
             pos_emb = create_sin_embedding(positions, cross_attention_output.shape[-1])
-            cross_attention_output = cross_attention_output + self.cross_attention_pos_emb_scale * pos_emb
+            cross_attention_output = (
+                cross_attention_output + self.cross_attention_pos_emb_scale * pos_emb
+            )
 
         if self._is_streaming:
-            self._streaming_state['offsets'] = offsets + T
+            self._streaming_state["offsets"] = offsets + T
 
         return input, cross_attention_output, prepend_length

@@ -1,4 +1,5 @@
 """Tests for muscriptor/modules/transformer.py — CPU only, small tensors."""
+
 import pytest
 import torch
 
@@ -16,12 +17,16 @@ from muscriptor.modules.transformer import (
 # Normalization helpers
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("norm_type", [
-    "layer_norm",
-    "layer_norm_f32",
-    "rms_norm",
-    "rms_norm_f32",
-])
+
+@pytest.mark.parametrize(
+    "norm_type",
+    [
+        "layer_norm",
+        "layer_norm_f32",
+        "rms_norm",
+        "rms_norm_f32",
+    ],
+)
 def test_create_norm_fn_forward(norm_type):
     dim = 16
     norm = create_norm_fn(norm_type, dim)
@@ -47,6 +52,7 @@ def test_rms_norm_output_shape():
 # Sinusoidal embeddings
 # ---------------------------------------------------------------------------
 
+
 def test_create_sin_embedding_shape():
     positions = torch.arange(10).float().view(1, 10, 1)  # [B, T, 1]
     emb = create_sin_embedding(positions, dim=16)
@@ -60,7 +66,7 @@ def test_create_sin_embedding_dim_even():
 
 
 def test_create_sin_embedding_different_positions():
-    pos1 = torch.tensor([[[0.0]]])   # [1, 1, 1]
+    pos1 = torch.tensor([[[0.0]]])  # [1, 1, 1]
     pos2 = torch.tensor([[[1.0]]])
     e1 = create_sin_embedding(pos1, dim=8)
     e2 = create_sin_embedding(pos2, dim=8)
@@ -71,10 +77,14 @@ def test_create_sin_embedding_different_positions():
 # KVCache
 # ---------------------------------------------------------------------------
 
+
 def test_kvcache_complete_shape():
     cache = KVCache(
-        batch_size=2, num_heads=2, dim_per_head=4,
-        device=torch.device("cpu"), dtype=torch.float32
+        batch_size=2,
+        num_heads=2,
+        dim_per_head=4,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
     )
     k = torch.randn(2, 2, 1, 4)
     v = torch.randn(2, 2, 1, 4)
@@ -86,6 +96,7 @@ def test_kvcache_complete_shape():
 # ---------------------------------------------------------------------------
 # StreamingTransformer forward
 # ---------------------------------------------------------------------------
+
 
 def _make_transformer(**kwargs):
     defaults = dict(
@@ -136,7 +147,7 @@ def test_streaming_transformer_streaming_mode():
         with model.streaming():
             streaming_outs = []
             for t in range(x.shape[1]):
-                out_t = model(x[:, t:t+1, :])
+                out_t = model(x[:, t : t + 1, :])
                 streaming_outs.append(out_t)
         streaming_out = torch.cat(streaming_outs, dim=1)
 
