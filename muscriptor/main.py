@@ -26,9 +26,39 @@ def transcribe(
         None, "--model", "-m", help="Path to safetensors weights file"),
     device: str = typer.Option(
         "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"),
+    instruments: tp.Optional[str] = typer.Option(
+        None, "--instruments",
+        help=(
+            "Comma-separated list of expected instrument group names "
+            "(e.g. 'acoustic_piano,acoustic_guitar,acoustic_bass'). "
+            "Use --list-instruments to see all available names."
+        ),
+    ),
+    list_instruments: bool = typer.Option(
+        False, "--list-instruments",
+        help="Print available instrument group names and exit."),
 ):
     """Transcribe an audio file to MIDI."""
+    from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
     from muscriptor.transcription_model import TranscriptionModel
+
+    if list_instruments:
+        for name, gid in MT3_FULL_PLUS_GROUP_NAMES.items():
+            typer.echo(f"  {gid:2d}  {name}")
+        raise typer.Exit(0)
+
+    instrument_group: tp.Optional[str] = None
+    if instruments is not None:
+        names = [n.strip() for n in instruments.split(",") if n.strip()]
+        unknown = [n for n in names if n not in MT3_FULL_PLUS_GROUP_NAMES]
+        if unknown:
+            typer.echo(
+                f"Error: unknown instrument name(s): {', '.join(unknown)}. "
+                "Use --list-instruments to see available names.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        instrument_group = " ".join(str(MT3_FULL_PLUS_GROUP_NAMES[n]) for n in names)
 
     if not audio_file.exists():
         typer.echo(f"Error: file not found: {audio_file}", err=True)
@@ -53,6 +83,7 @@ def transcribe(
         use_sampling=sampling,
         temperature=temperature,
         cfg_coef=cfg_coef,
+        instrument_group=instrument_group,
     )
 
     typer.echo(f"Saved MIDI to {output}")

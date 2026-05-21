@@ -1,13 +1,30 @@
 """TranscriptionModel: main user-facing entry point."""
 
+import contextlib
 import dataclasses
 import math
 import re
+import time
 import typing as tp
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+
+
+@contextlib.contextmanager
+def _timed(label: str, store: tp.Optional[tp.List[tp.Tuple[str, float]]] = None):
+    """Print and (optionally) record how long a block of work takes."""
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    yield
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    dt = time.perf_counter() - t0
+    print(f"[muscriptor] {label}: {dt:.2f}s")
+    if store is not None:
+        store.append((label, dt))
 
 from muscriptor.models.lm import LMModel, TorchAutocast
 from muscriptor.modules.conditioners import (
@@ -196,7 +213,11 @@ class TranscriptionModel:
         Returns:
             List of :class:`Note` objects when return_notes is True, else None.
         """
-        wav = self._load_wav(audio, sample_rate)
+        timings: tp.List[tp.Tuple[str, float]] = []
+        t_total = time.perf_counter()
+
+        with _timed("load audio", timings):
+            wav = self._load_wav(audio, sample_rate)
         total_samples = wav.shape[-1]
         total_duration = total_samples / _SAMPLE_RATE
 
@@ -204,34 +225,39 @@ class TranscriptionModel:
         num_chunks = math.ceil(total_samples / segment_samples)
         max_gen_len = self._tokenizer.get_generation_length(_SEGMENT_DURATION)
         eos_id = self._tokenizer.tokenizer.eos_id
+        print(f"[muscriptor] audio: {total_duration:.1f}s → {num_chunks} chunk(s) of {_SEGMENT_DURATION}s")
 
-        # Build all chunk conditions upfront so we can batch them.
-        all_conditions: tp.List[ConditioningAttributes] = []
-        seek_times: tp.List[float] = []
-        for i in range(num_chunks):
-            start = i * segment_samples
-            chunk = wav[:, start:start + segment_samples]
-            if chunk.shape[-1] < segment_samples:
-                chunk = F.pad(chunk, (0, segment_samples - chunk.shape[-1]))
-            all_conditions.append(self._build_conditions(chunk, instrument_group, dataset_name)[0])
-            seek_times.append(i * _SEGMENT_DURATION)
+        with _timed("build conditions", timings):
+            all_conditions: tp.List[ConditioningAttributes] = []
+            seek_times: tp.List[float] = []
+            for i in range(num_chunks):
+                start = i * segment_samples
+                chunk = wav[:, start:start + segment_samples]
+                if chunk.shape[-1] < segment_samples:
+                    chunk = F.pad(chunk, (0, segment_samples - chunk.shape[-1]))
+                all_conditions.append(self._build_conditions(chunk, instrument_group, dataset_name)[0])
+                seek_times.append(i * _SEGMENT_DURATION)
 
         # Generate in batches of 16 (matching the evaluation solver).
         all_tokens: tp.List[torch.Tensor] = []
+        t_gen = time.perf_counter()
+        num_batches = math.ceil(len(all_conditions) / 16)
         for i in range(0, len(all_conditions), 16):
             batch_conditions = all_conditions[i:i + 16]
-            with torch.no_grad():
-                tokens = self._model.generate(
-                    conditions=batch_conditions,
-                    max_gen_len=max_gen_len,
-                    use_sampling=use_sampling,
-                    temp=temperature,
-                    top_k=0,
-                    top_p=0.0,
-                    cfg_coef=cfg_coef,
-                    early_stop_on_token=eos_id,
-                )  # [batch, n_q, T_gen]
-            
+            batch_idx = i // 16 + 1
+            with _timed(f"generate batch {batch_idx}/{num_batches} ({len(batch_conditions)} chunks)", timings):
+                with torch.no_grad():
+                    tokens = self._model.generate(
+                        conditions=batch_conditions,
+                        max_gen_len=max_gen_len,
+                        use_sampling=use_sampling,
+                        temp=temperature,
+                        top_k=0,
+                        top_p=0.0,
+                        cfg_coef=cfg_coef,
+                        early_stop_on_token=eos_id,
+                    )  # [batch, n_q, T_gen]
+
             # we cut off at the first EOS token, which is included in the output since it signals the end of the sequence
             for j in range(tokens.shape[0]):
                 seq = tokens[j]  # [n_q, T_gen]
@@ -239,15 +265,22 @@ class TranscriptionModel:
                 if eos_mask.any():
                     seq = seq[:, :eos_mask.int().argmax().item() + 1]
                 all_tokens.append(seq)
-        # return all_tokens
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"[muscriptor] generate total: {time.perf_counter() - t_gen:.2f}s")
 
-        notes_dict, _ = self._tokenizer.decode_segmented_track(
-            all_tokens, seek_times, total_duration, _SEGMENT_DURATION,
-        )
+        with _timed("decode tokens → notes", timings):
+            notes_dict, _ = self._tokenizer.decode_segmented_track(
+                all_tokens, seek_times, total_duration, _SEGMENT_DURATION,
+            )
         notes: tp.List[Note] = notes_dict["notes"]
 
         if output_midi is not None:
-            save_midi(notes, output_midi)
+            with _timed("save MIDI", timings):
+                save_midi(notes, output_midi)
+
+        print(f"[muscriptor] transcribe total: {time.perf_counter() - t_total:.2f}s "
+              f"({len(notes)} notes, {total_duration:.1f}s audio)")
 
         if return_notes:
             return notes

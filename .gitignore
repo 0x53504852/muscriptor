@@ -1,3 +1,6 @@
 *.safetensors
 *.pyc
 *.mid
+*.wav
+*.mp3
+*.ogg

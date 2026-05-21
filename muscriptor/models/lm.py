@@ -332,9 +332,6 @@ class LMModel(StreamingModule):
             all_logits = self(doubled, conditions=[], condition_tensors=cfg_conditions)
             cond_logits, uncond_logits = all_logits.split(B, dim=0)
             logits = uncond_logits + (cond_logits - uncond_logits) * cfg_coef
-            _cfg_last = logits[0, 0, -1].float()
-            _top_vals, _top_ids = _cfg_last.topk(5)
-            print(f"[muscriptor] CFG logits top5: ids={_top_ids.tolist()}  vals={_top_vals.tolist()}")
 
         # logits: [B, K, S, card] — take the last time step
         logits = logits[:, :, -1, :].float()  # [B, K, card]
@@ -447,7 +444,6 @@ class LMModel(StreamingModule):
                 next_token = torch.where(
                     this_gen_step == ungenerated, next_token[:, :, 0], this_gen_step)
                 gen_sequence[:, :, offset + 1] = next_token
-                print(f"[muscriptor] step {offset:4d}: token={next_token.tolist()}")
 
                 if callback is not None:
                     callback(1 + offset - start_offset,

@@ -92,6 +92,48 @@ def get_group_program_map(instrument_vocabulary: str,
     return ret
 
 
+# Human-readable names for the MT3_FULL_PLUS instrument groups (see
+# get_group_program_map). Used by the CLI's --expected-instruments option.
+MT3_FULL_PLUS_GROUP_NAMES: Dict[str, int] = {
+    "acoustic_piano": 0,
+    "electric_piano": 1,
+    "chromatic_percussion": 2,
+    "organ": 3,
+    "acoustic_guitar": 4,
+    "clean_electric_guitar": 5,
+    "distorted_electric_guitar": 6,
+    "acoustic_bass": 7,
+    "electric_bass": 8,
+    "violin": 9,
+    "viola": 10,
+    "cello": 11,
+    "contrabass": 12,
+    "harp": 13,
+    "timpani": 14,
+    "strings": 15,
+    "synth_strings": 16,
+    "voice": 17,
+    "orchestra_hit": 18,
+    "trumpet": 19,
+    "trombone": 20,
+    "tuba": 21,
+    "french_horn": 22,
+    "brass": 23,
+    "high_sax": 24,
+    "tenor_sax": 25,
+    "baritone_sax": 26,
+    "oboe": 27,
+    "english_horn": 28,
+    "bassoon": 29,
+    "clarinet": 30,
+    "pipe": 31,
+    "synth_lead": 32,
+    "synth_pad": 33,
+    "fx_brightness": 34,
+    "fx_goblins": 35,
+}
+
+
 def group_program_map_to_amt_vocab_dict(instrument_group_to_program_map):
     midi_instrument_names = [
         'Acoustic Grand Piano', 'Bright Acoustic Piano', 'Electric Grand Piano', 'Honky-tonk Piano',
