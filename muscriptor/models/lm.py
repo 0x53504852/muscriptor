@@ -380,17 +380,30 @@ class LMModel(StreamingModule):
         cfg_coef = self.cfg_coef if cfg_coef is None else cfg_coef
 
         # Build condition tensors (with null conditions appended for CFG)
+        import time as _time
         if conditions:
             if cfg_coef == 1.0:
                 prepared = self.condition_provider.tokenize(conditions)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                _t = _time.perf_counter()
                 cfg_conditions: ConditionTensors = self.condition_provider(prepared)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                print(f"[muscriptor] encode conditions (total): {_time.perf_counter() - _t:.3f}s")
             else:
                 null_conditions = ClassifierFreeGuidanceDropout(p=1.0)(conditions)
                 all_conditions = conditions + null_conditions
                 prepared = self.condition_provider.tokenize(all_conditions)
                 print("[muscriptor] instrument_group tokens:", prepared.get('instrument_group'))
                 print("[muscriptor] dataset_name tokens:    ", prepared.get('dataset_name'))
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                _t = _time.perf_counter()
                 cfg_conditions = self.condition_provider(prepared)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                print(f"[muscriptor] encode conditions (total): {_time.perf_counter() - _t:.3f}s")
         else:
             cfg_conditions = {}
 

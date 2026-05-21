@@ -221,6 +221,10 @@ class MelSpectrogramConditioner(WaveformConditioner):
     def _get_wav_embedding(self, x: WavCondition) -> torch.Tensor:
         if x.wav.shape[-1] == 1:
             return torch.zeros(x.wav.shape[0], 1, self.dim, device=self.device)
+        import time
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
         with torch.no_grad():
             wav = x.wav
             if self.normalize_audio:
@@ -231,6 +235,10 @@ class MelSpectrogramConditioner(WaveformConditioner):
                 mel = rearrange(mel[:, :-1], 'b (t f) d -> b t (f d)', f=self.fine_frame_rate_ratio)
             if self.log_scale:
                 mel = torch.log(mel + self.eps)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"[muscriptor] mel-spec ({wav.shape[0]} × {wav.shape[-1]} samples): "
+              f"{time.perf_counter() - t0:.3f}s")
         return mel
 
 
