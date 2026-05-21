@@ -28,3 +28,8 @@ muscriptor = "muscriptor.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["muscriptor"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+]
