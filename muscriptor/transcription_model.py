@@ -22,7 +22,7 @@ from muscriptor.modules.conditioners import (
 )
 from muscriptor.tokenizer.mt3 import MT3Tokenizer
 from muscriptor.tokenizer.notes import Note
-from muscriptor.utils.audio import load_audio
+from muscriptor.utils.audio import load_audio, resample
 from muscriptor.utils.midi import save_midi
 
 
@@ -338,9 +338,7 @@ class TranscriptionModel:
             if wav.shape[0] > 1:
                 wav = wav.mean(0, keepdim=True)
             if sample_rate is not None and sample_rate != _SAMPLE_RATE:
-                import torchaudio
-
-                wav = torchaudio.transforms.Resample(sample_rate, _SAMPLE_RATE)(wav)
+                wav = resample(wav, sample_rate, _SAMPLE_RATE)
         return wav.to(self._device)
 
     def _build_conditions(

@@ -18,9 +18,11 @@ from torch import nn
 from torch.nn import functional as F
 from einops import rearrange
 
+from muscriptor.modules.mel_spectrogram import _MelSpectrogram
 from muscriptor.modules.streaming import StreamingModule
 from muscriptor.modules.transformer import create_sin_embedding
 from muscriptor.utils.sampling import length_to_mask
+
 
 ConditionType = tp.Tuple[
     torch.Tensor, torch.Tensor
@@ -201,8 +203,6 @@ class MelSpectrogramConditioner(WaveformConditioner):
         fine_frame_rate: int = None,
         use_null_embedding: bool = False,
     ):
-        import torchaudio
-
         assert not filter_drums, "filter_drums not supported"
         assert not concat_real_im, "concat_real_im not supported"
         assert not separate_stems, "separate_stems not supported"
@@ -232,7 +232,7 @@ class MelSpectrogramConditioner(WaveformConditioner):
             assert sample_rate % fine_frame_rate == 0
             self.hop_length = sample_rate // fine_frame_rate
 
-        self.mel_spec_transform = torchaudio.transforms.MelSpectrogram(
+        self.mel_spec_transform = _MelSpectrogram(
             sample_rate=sample_rate,
             n_fft=n_fft,
             hop_length=self.hop_length,
