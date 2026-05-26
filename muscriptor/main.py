@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 
+from muscriptor.events import NoteEndEvent, NoteStartEvent
 from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
 from muscriptor.transcription_model import TranscriptionModel
 
@@ -16,6 +17,16 @@ app = typer.Typer(add_completion=False, help="muscriptor — audio-to-MIDI trans
 class OutputFormat(str, Enum):
     midi = "midi"
     json = "json"
+
+
+def _event_to_dict(ev: NoteStartEvent | NoteEndEvent) -> dict:
+    if isinstance(ev, NoteStartEvent):
+        return {"type": "start", **dataclasses.asdict(ev)}
+    return {
+        "type": "end",
+        "end_time": ev.end_time,
+        "start_event_index": ev.start_event_index,
+    }
 
 
 @app.command()
@@ -31,10 +42,10 @@ def transcribe(
         OutputFormat.midi,
         "--format",
         "-f",
-        help="Output format: midi (default) or json",
+        help="Output format: midi (default) or json (list of NoteStart/NoteEnd events)",
         case_sensitive=False,
     ),
-    notes: bool = typer.Option(False, "--notes", help="Print decoded notes to stdout"),
+    notes: bool = typer.Option(False, "--notes", help="Print decoded events to stdout"),
     sampling: bool = typer.Option(
         False, "--sampling", help="Use temperature sampling instead of greedy decoding"
     ),
@@ -50,11 +61,11 @@ def transcribe(
     device: str = typer.Option(
         "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
     ),
-    batch_size: int = typer.Option(
-        16,
+    batch_size: int | None = typer.Option(
+        None,
         "--batch-size",
         "-b",
-        help="Batch size for generation (number of 5s chunks per forward pass)",
+        help="Batch size for generation (default: 1 on CPU, 4 on GPU)",
     ),
     no_eos_is_ok: bool = typer.Option(
         False,
@@ -103,10 +114,9 @@ def transcribe(
     )
 
     typer.echo(f"Transcribing {audio_file} …")
-    result = model.transcribe(
+
+    kwargs = dict(
         audio=audio_file,
-        output_midi=output if format == OutputFormat.midi else None,
-        return_notes=notes or format == OutputFormat.json,
         use_sampling=sampling,
         temperature=temperature,
         cfg_coef=cfg_coef,
@@ -115,21 +125,19 @@ def transcribe(
         no_eos_is_ok=no_eos_is_ok,
     )
 
-    if format == OutputFormat.json:
-        assert result is not None
-        output.write_text(json.dumps([dataclasses.asdict(n) for n in result], indent=2))
-        typer.echo(f"Saved JSON to {output}")
-    else:
+    if format == OutputFormat.midi:
+        midi_bytes = model.transcribe_to_midi(**kwargs)
+        output.write_bytes(midi_bytes)
         typer.echo(f"Saved MIDI to {output}")
-
-    if notes and result is not None:
-        typer.echo(f"\n{len(result)} notes:")
-        for n in result:
-            typer.echo(
-                f"  program={n.program:3d}  pitch={n.pitch:3d}  "
-                f"onset={n.onset:.3f}  offset={n.offset:.3f}  "
-                f"drum={n.is_drum}"
-            )
+        if notes:
+            typer.echo("Re-run with --format json to inspect the event stream.")
+    else:  # json
+        events = list(model.transcribe(**kwargs))
+        output.write_text(json.dumps([_event_to_dict(e) for e in events], indent=2))
+        typer.echo(f"Saved JSON to {output}")
+        if notes:
+            for e in events:
+                typer.echo(str(e))
 
 
 @app.command()

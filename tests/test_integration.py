@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from muscriptor.tokenizer.notes import Note
+from muscriptor.events import NoteEndEvent, NoteStartEvent
 from .conftest import SONG_PATH
 
 # Model constants
@@ -120,70 +120,70 @@ def test_build_conditions_wav_shape(transcription_model):
 
 
 # ---------------------------------------------------------------------------
-# transcribe — return_notes
+# transcribe — event stream
 # ---------------------------------------------------------------------------
 
 
-def test_transcribe_returns_list(transcription_model, silence):
-    notes = transcription_model.transcribe(
-        silence, sample_rate=_SAMPLE_RATE, return_notes=True
-    )
-    assert isinstance(notes, list)
+def _collect(model, audio):
+    return list(model.transcribe((audio, _SAMPLE_RATE)))
 
 
-def test_transcribe_note_types(transcription_model, noise):
-    notes = transcription_model.transcribe(
-        noise, sample_rate=_SAMPLE_RATE, return_notes=True
-    )
-    for note in notes:
-        assert isinstance(note, Note)
+def _assert_start_end_invariants(events):
+    starts = [e for e in events if isinstance(e, NoteStartEvent)]
+    ends = [e for e in events if isinstance(e, NoteEndEvent)]
+    assert len(starts) == len(ends), "every NoteStart must have a matching NoteEnd"
+    start_ids = {s.index for s in starts}
+    end_ids = {e.start_event_index for e in ends}
+    assert start_ids == end_ids
+    assert len(start_ids) == len(starts), "indices must be unique"
+
+
+def test_transcribe_returns_iterator(transcription_model, silence):
+    events = _collect(transcription_model, silence)
+    assert isinstance(events, list)
+    for ev in events:
+        assert isinstance(ev, (NoteStartEvent, NoteEndEvent))
+
+
+def test_transcribe_start_end_pair_invariant(transcription_model, noise):
+    events = _collect(transcription_model, noise)
+    _assert_start_end_invariants(events)
 
 
 def test_transcribe_note_fields_in_range(transcription_model, noise):
-    notes = transcription_model.transcribe(
-        noise, sample_rate=_SAMPLE_RATE, return_notes=True
-    )
-    for note in notes:
-        assert 0 <= note.pitch <= 127
-        assert 0 <= note.program <= 128  # 128 = drums
-        assert note.onset >= 0.0
-        assert note.offset >= note.onset
-
-
-def test_transcribe_returns_none_by_default(transcription_model, silence):
-    result = transcription_model.transcribe(silence, sample_rate=_SAMPLE_RATE)
-    assert result is None
+    events = _collect(transcription_model, noise)
+    for ev in events:
+        if isinstance(ev, NoteStartEvent):
+            assert 0 <= ev.pitch <= 127
+            assert ev.start_time >= 0.0
+            assert ev.instrument
+        else:
+            assert ev.end_time >= ev.start_event.start_time
 
 
 # ---------------------------------------------------------------------------
-# transcribe — MIDI output
+# transcribe_to_midi
 # ---------------------------------------------------------------------------
 
 
-def test_transcribe_saves_midi(transcription_model, silence):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        out = Path(tmpdir) / "out.mid"
-        transcription_model.transcribe(
-            silence, sample_rate=_SAMPLE_RATE, output_midi=out
-        )
-        assert out.exists()
-        assert out.stat().st_size > 0
+def test_transcribe_to_midi_returns_bytes(transcription_model, silence):
+    midi_bytes = transcription_model.transcribe_to_midi((silence, _SAMPLE_RATE))
+    assert isinstance(midi_bytes, bytes)
+    assert len(midi_bytes) > 0
 
 
-def test_transcribe_midi_is_valid(transcription_model, silence):
+def test_transcribe_to_midi_is_valid(transcription_model, silence):
     from mido import MidiFile
 
     with tempfile.TemporaryDirectory() as tmpdir:
         out = Path(tmpdir) / "out.mid"
-        transcription_model.transcribe(
-            silence, sample_rate=_SAMPLE_RATE, output_midi=out
-        )
+        out.write_bytes(transcription_model.transcribe_to_midi((silence, _SAMPLE_RATE)))
         midi = MidiFile(str(out))
         assert len(midi.tracks) > 0
 
 
 def test_cli_json_output(transcription_model, silence, monkeypatch):
-    """End-to-end: `muscriptor transcribe --format json` writes a valid notes list."""
+    """End-to-end: `muscriptor transcribe --format json` writes a valid event list."""
     import json
     import wave
 
@@ -213,13 +213,27 @@ def test_cli_json_output(transcription_model, silence, monkeypatch):
         assert result.exit_code == 0, result.output
 
         assert out_path.exists()
-        notes = json.loads(out_path.read_text())
-        assert isinstance(notes, list)
-        for n in notes:
-            assert set(n.keys()) == {"is_drum", "program", "onset", "offset", "pitch"}
-            assert isinstance(n["is_drum"], bool)
-            assert 0 <= n["pitch"] <= 127
-            assert n["offset"] >= n["onset"]
+        events = json.loads(out_path.read_text())
+        assert isinstance(events, list)
+        seen_starts: dict[int, dict] = {}
+        for e in events:
+            assert e["type"] in {"start", "end"}
+            if e["type"] == "start":
+                assert set(e.keys()) == {
+                    "type",
+                    "pitch",
+                    "start_time",
+                    "index",
+                    "instrument",
+                }
+                assert 0 <= e["pitch"] <= 127
+                assert e["index"] not in seen_starts
+                seen_starts[e["index"]] = e
+            else:
+                assert set(e.keys()) == {"type", "end_time", "start_event_index"}
+                start = seen_starts.pop(e["start_event_index"])
+                assert e["end_time"] >= start["start_time"]
+        assert seen_starts == {}, "every start should have an end"
 
 
 # ---------------------------------------------------------------------------
@@ -228,35 +242,25 @@ def test_cli_json_output(transcription_model, silence, monkeypatch):
 
 
 def test_transcribe_greedy(transcription_model, silence):
-    notes = transcription_model.transcribe(
-        silence,
-        sample_rate=_SAMPLE_RATE,
-        return_notes=True,
-        use_sampling=False,
+    events = list(
+        transcription_model.transcribe((silence, _SAMPLE_RATE), use_sampling=False)
     )
-    assert isinstance(notes, list)
+    assert isinstance(events, list)
 
 
 def test_transcribe_sampling(transcription_model, noise):
-    notes = transcription_model.transcribe(
-        noise,
-        sample_rate=_SAMPLE_RATE,
-        return_notes=True,
-        use_sampling=True,
-        temperature=1.0,
+    events = list(
+        transcription_model.transcribe(
+            (noise, _SAMPLE_RATE), use_sampling=True, temperature=1.0
+        )
     )
-    assert isinstance(notes, list)
+    assert isinstance(events, list)
 
 
 def test_transcribe_cfg_coef_zero(transcription_model, silence):
-    # cfg_coef=0 means no guidance; should still run and return notes
-    notes = transcription_model.transcribe(
-        silence,
-        sample_rate=_SAMPLE_RATE,
-        return_notes=True,
-        cfg_coef=0.0,
-    )
-    assert isinstance(notes, list)
+    # cfg_coef=0 means no guidance; should still run and yield (possibly empty) events
+    events = list(transcription_model.transcribe((silence, _SAMPLE_RATE), cfg_coef=0.0))
+    assert isinstance(events, list)
 
 
 # ---------------------------------------------------------------------------
@@ -270,38 +274,30 @@ def test_song_clip_shape(song_clip):
     assert song_clip.shape[1] == _SAMPLE_RATE * _SONG_CLIP_SEC
 
 
-def test_transcribe_song_returns_notes(transcription_model, song_clip):
-    notes = transcription_model.transcribe(
-        song_clip,
-        sample_rate=_SAMPLE_RATE,
-        return_notes=True,
-    )
-    assert isinstance(notes, list)
-    assert len(notes) > 0, "expected at least some notes from a real song"
+def test_transcribe_song_returns_events(transcription_model, song_clip):
+    events = list(transcription_model.transcribe((song_clip, _SAMPLE_RATE)))
+    assert isinstance(events, list)
+    assert len(events) > 0, "expected at least some events from a real song"
+    _assert_start_end_invariants(events)
 
 
 def test_transcribe_song_note_validity(transcription_model, song_clip):
-    notes = transcription_model.transcribe(
-        song_clip,
-        sample_rate=_SAMPLE_RATE,
-        return_notes=True,
-    )
-    for note in notes:
-        assert 0 <= note.pitch <= 127
-        assert 0 <= note.program <= 128
-        assert note.onset >= 0.0
-        assert note.offset > note.onset
+    events = list(transcription_model.transcribe((song_clip, _SAMPLE_RATE)))
+    for ev in events:
+        if isinstance(ev, NoteStartEvent):
+            assert 0 <= ev.pitch <= 127
+            assert ev.start_time >= 0.0
+        else:
+            assert ev.end_time >= ev.start_event.start_time
 
 
-def test_transcribe_song_saves_midi(transcription_model, song_clip):
+def test_transcribe_song_to_midi(transcription_model, song_clip):
     from mido import MidiFile
 
     with tempfile.TemporaryDirectory() as tmpdir:
         out = Path(tmpdir) / "filling_the_void_10s.mid"
-        transcription_model.transcribe(
-            song_clip,
-            sample_rate=_SAMPLE_RATE,
-            output_midi=out,
+        out.write_bytes(
+            transcription_model.transcribe_to_midi((song_clip, _SAMPLE_RATE))
         )
         assert out.exists()
         midi = MidiFile(str(out))
@@ -312,9 +308,6 @@ def test_transcribe_song_from_file_path(transcription_model):
     """Transcribe directly from the file path (exercises load_audio)."""
     if not SONG_PATH.exists():
         pytest.skip(f"Song not found at {SONG_PATH}")
-    notes = transcription_model.transcribe(
-        SONG_PATH,
-        return_notes=True,
-    )
-    assert isinstance(notes, list)
-    assert len(notes) > 0
+    events = list(transcription_model.transcribe(SONG_PATH))
+    assert isinstance(events, list)
+    assert len(events) > 0

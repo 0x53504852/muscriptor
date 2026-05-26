@@ -4,7 +4,6 @@ Adapted from YourMT3+ (https://github.com/mimbres/YourMT3).
 """
 
 import os
-import warnings
 from collections import Counter
 from dataclasses import dataclass
 
@@ -413,58 +412,6 @@ class NoteEventTokenizer:
         events = [self.event_tokenizer.decode_event_index(idx) for idx in tokens]
         return event2note_event(events, start_time, self.frame_rate)
 
-    def decode_segments(
-        self, list_tokens: list[list[int]], list_start_times: list[float]
-    ):
-        assert len(list_tokens) == len(list_start_times)
-        zipped = []
-        total_err_cnt: Counter = Counter()
-        for tokens, start_time in zip(list_tokens, list_start_times):
-            note_events, tie_note_events, last_activity, err_cnt = self.decode(
-                tokens, start_time
-            )
-            zipped.append((note_events, tie_note_events, last_activity, start_time))
-            total_err_cnt += err_cnt
-        return zipped, total_err_cnt
-
-
-def slice_note_events_and_ties(
-    note_events: list[NoteEvent], start_time: float, end_time: float
-) -> tuple[list[NoteEvent], list[TieNoteEvent]]:
-    if start_time > end_time:
-        raise ValueError(
-            f"slice_note_events: start_time {start_time} > end_time {end_time}"
-        )
-    elif len(note_events) == 0:
-        warnings.warn("slice_note_events: empty note_events as input")
-        return [], []
-
-    start_index, end_index = None, None
-    tie_activity = set()
-    for i, ne in enumerate(note_events):
-        if start_index is None and start_time <= ne.time < end_time:
-            start_index = i
-        if start_index is None and not ne.is_drum:
-            if ne.velocity > 0:
-                tie_activity.add((ne.program, ne.pitch))
-            elif ne.velocity == 0 and (ne.program, ne.pitch) in tie_activity:
-                tie_activity.remove((ne.program, ne.pitch))
-        if ne.time >= end_time:
-            end_index = i
-            break
-
-    if start_index is None and (end_index is None or end_index == 0):
-        tie_note_events = []
-    else:
-        tie_note_events = [TieNoteEvent(program=p, pitch=pi) for p, pi in tie_activity]
-    sort_tie_note_events(tie_note_events)
-
-    sliced_note_events = (
-        [] if start_index is None else note_events[start_index:end_index]
-    )
-    sort_note_events(sliced_note_events)
-    return sliced_note_events, tie_note_events
-
 
 def note_event2note(
     note_events: list[NoteEvent],
@@ -584,60 +531,6 @@ def note2note_event(notes: list[Note]) -> list[NoteEvent]:
             )
     sort_note_events(note_events)
     return note_events
-
-
-def merge_zipped_note_events_and_ties_to_notes(
-    zipped_note_events_and_ties,
-    segment_duration,
-    force_note_off_missing_tie: bool = True,
-    fix_broken_notes: bool = True,
-) -> tuple[list[Note], Counter]:
-    merged_note_events = []
-    prev_last_activity = None
-    seg_merge_err_cnt: Counter = Counter()
-
-    for i, (nes, tie_nes, last_activity, start_time) in enumerate(
-        zipped_note_events_and_ties
-    ):
-        this_segment_end_time = start_time + segment_duration
-        next_segment_start_time = (
-            zipped_note_events_and_ties[i + 1][3]
-            if i < len(zipped_note_events_and_ties) - 1
-            else None
-        )
-        if (
-            next_segment_start_time is not None
-            and next_segment_start_time != this_segment_end_time
-        ):
-            nes = [ne for ne in nes if ne.time < next_segment_start_time]
-            last_activity = set([(ne.program, ne.pitch) for ne in tie_nes])
-            for ne in nes:
-                if ne.velocity == 0 and (ne.program, ne.pitch) in last_activity:
-                    last_activity.remove((ne.program, ne.pitch))
-                if ne.velocity > 1:
-                    last_activity.add((ne.program, ne.pitch))
-        if prev_last_activity is not None and force_note_off_missing_tie:
-            prog_pitch_tie = set([(ne.program, ne.pitch) for ne in tie_nes])
-            for prog_pitch_pla in prev_last_activity:
-                if prog_pitch_pla not in prog_pitch_tie:
-                    merged_note_events.append(
-                        NoteEvent(
-                            is_drum=False,
-                            program=prog_pitch_pla[0],
-                            time=start_time,
-                            velocity=0,
-                            pitch=prog_pitch_pla[1],
-                        )
-                    )
-                    seg_merge_err_cnt["Err/merging segment tie"] += 1
-        merged_note_events += nes
-        prev_last_activity = last_activity
-
-    notes, err_cnt = note_event2note(
-        merged_note_events, tie_note_events=None, fix_broken_notes=fix_broken_notes
-    )
-    err_cnt.update(seg_merge_err_cnt)
-    return notes, err_cnt
 
 
 def note_event2midi(

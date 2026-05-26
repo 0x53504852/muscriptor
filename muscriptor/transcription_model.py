@@ -1,11 +1,13 @@
 """TranscriptionModel: main user-facing entry point."""
 
 import contextlib
-import dataclasses
+import io
 import math
 import re
 import time
 import warnings
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -13,6 +15,11 @@ import torch.nn.functional as F
 
 from safetensors.torch import load_file
 
+from muscriptor.events import (
+    NoteEndEvent,
+    NoteStartEvent,
+    _StreamingEventBuilder,
+)
 from muscriptor.models.lm import LMModel, TorchAutocast
 from muscriptor.utils.download import download_if_necessary
 from muscriptor.modules.conditioners import (
@@ -22,10 +29,15 @@ from muscriptor.modules.conditioners import (
     ConditioningAttributes,
     WavCondition,
 )
-from muscriptor.tokenizer.mt3 import MT3Tokenizer
-from muscriptor.tokenizer.notes import Note
+from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES, MT3Tokenizer
+from muscriptor.tokenizer.notes import (
+    DRUM_PROGRAM,
+    Note,
+    trim_overlapping_notes,
+    validate_notes,
+)
 from muscriptor.utils.audio import load_audio, resample
-from muscriptor.utils.midi import save_midi
+from muscriptor.utils.midi import notes_to_midi
 
 
 @contextlib.contextmanager
@@ -51,7 +63,7 @@ _SAMPLE_RATE = 16000
 _SEGMENT_DURATION = 5.0
 
 
-@dataclasses.dataclass
+@dataclass
 class _ModelConfig:
     dim: int
     num_heads: int
@@ -124,20 +136,46 @@ def _build_model(device: torch.device, cfg: _ModelConfig = _DEFAULT_CONFIG) -> L
     return model
 
 
+def _build_instrument_for_program(tokenizer: MT3Tokenizer) -> Callable[[int], str]:
+    """Map a decoded program int → human-readable instrument name.
+
+    MT3_FULL_PLUS groups multiple GM programs together; the decoded program
+    is always the first program of the group. We map that representative
+    back to the readable group name.
+    """
+    group_map = tokenizer.group_program_map
+    program_to_name: dict[int, str] = {}
+    for name, gid in MT3_FULL_PLUS_GROUP_NAMES.items():
+        if gid in group_map and group_map[gid]:
+            program_to_name[group_map[gid][0]] = name
+
+    def lookup(program: int) -> str:
+        if program == DRUM_PROGRAM:
+            return "drums"
+        return program_to_name.get(program, f"program_{program}")
+
+    return lookup
+
+
 class TranscriptionModel:
     """Transcribes audio to MIDI using the muscriptor model.
 
     Example::
 
+        from pathlib import Path
+
         model = TranscriptionModel.load_model()
-        notes = model.transcribe("audio.wav", return_notes=True)
-        model.transcribe("audio.wav", output_midi="out.mid")
+        for event in model.transcribe("audio.wav"):
+            print(event)
+
+        Path("out.mid").write_bytes(model.transcribe_to_midi("audio.wav"))
     """
 
     def __init__(self, model: LMModel, tokenizer: MT3Tokenizer, device: torch.device):
         self._model = model
         self._tokenizer = tokenizer
         self._device = device
+        self._instrument_for_program = _build_instrument_for_program(tokenizer)
 
     @classmethod
     def load_model(
@@ -181,44 +219,36 @@ class TranscriptionModel:
     # ------------------------------------------------------------------
     def transcribe(
         self,
-        audio: str | Path | torch.Tensor,
-        sample_rate: int | None = None,
-        output_midi: str | Path | None = None,
-        return_notes: bool = False,
+        audio: str | Path | tuple[torch.Tensor, int],
         use_sampling: bool = False,
         temperature: float = 1.0,
         cfg_coef: float = 2.0,
         instrument_group: str | None = None,
         dataset_name: str | None = None,
-        batch_size: int = 16,
+        batch_size: int | None = None,
         no_eos_is_ok: bool = False,
-    ) -> list[Note] | None:
-        """Transcribe audio to MIDI / notes.
+    ) -> Iterator[NoteStartEvent | NoteEndEvent]:
+        """Transcribe audio into a stream of note events.
 
-        Audio longer than _SEGMENT_DURATION seconds is split into non-overlapping
-        5-second chunks (matching the evaluation protocol), each decoded
-        independently, then merged via decode_segmented_track.
-
-        Args:
-            audio: Path to an audio file, or a float tensor of shape [T] or
-                [1, T] at `sample_rate` Hz.
-            sample_rate: Required when `audio` is a tensor; ignored otherwise.
-            output_midi: If given, saves transcription as a MIDI file here.
-            return_notes: If True, return a list of :class:`Note` objects.
-            use_sampling: Use temperature sampling instead of greedy decoding.
-            temperature: Sampling temperature (only used when use_sampling=True).
-            cfg_coef: Classifier-free guidance coefficient.
-            instrument_group: Optional instrument group conditioning string.
-            dataset_name: Optional dataset name conditioning string.
-
-        Returns:
-            List of :class:`Note` objects when return_notes is True, else None.
+        See the README for full argument documentation and the streaming /
+        chunk-ordering guarantees. The audio is split into 5-second chunks;
+        within each chunk events arrive in temporal order, and all events
+        from chunk N are yielded before any event from chunk N+1.
         """
+        if batch_size is None:
+            batch_size = 4 if self._device.type == "cuda" else 1
+
         timings: list[tuple[str, float]] = []
         t_total = time.perf_counter()
 
-        with _timed("load audio", timings):
-            wav = self._load_wav(audio, sample_rate)
+        if isinstance(audio, tuple):
+            tensor, sample_rate = audio
+            with _timed("load audio", timings):
+                wav = self._load_wav(tensor, sample_rate)
+        else:
+            with _timed("load audio", timings):
+                wav = self._load_wav(audio, None)
+
         total_samples = wav.shape[-1]
         total_duration = total_samples / _SAMPLE_RATE
 
@@ -243,14 +273,14 @@ class TranscriptionModel:
                 )
                 seek_times.append(i * _SEGMENT_DURATION)
 
-        all_tokens: list[torch.Tensor] = []
+        builder = _StreamingEventBuilder(self._instrument_for_program)
+        num_batches = math.ceil(num_chunks / batch_size)
         t_gen = time.perf_counter()
-        num_batches = math.ceil(len(all_conditions) / batch_size)
-        for i in range(0, len(all_conditions), batch_size):
-            batch_conditions = all_conditions[i : i + batch_size]
-            batch_idx = i // batch_size + 1
+
+        for batch_idx, batch_start in enumerate(range(0, num_chunks, batch_size)):
+            batch_conditions = all_conditions[batch_start : batch_start + batch_size]
             with _timed(
-                f"generate batch {batch_idx}/{num_batches} ({len(batch_conditions)} chunks)",
+                f"generate batch {batch_idx + 1}/{num_batches} ({len(batch_conditions)} chunks)",
                 timings,
             ):
                 with torch.no_grad():
@@ -265,16 +295,22 @@ class TranscriptionModel:
                         early_stop_on_token=eos_id,
                     )  # [batch, n_q, T_gen]
 
-            # we cut off at the first EOS token, which is included in the output since it signals the end of the sequence
             for j in range(tokens.shape[0]):
+                chunk_index = batch_start + j
+                seek_time = seek_times[chunk_index]
+                next_seek_time = (
+                    seek_times[chunk_index + 1]
+                    if chunk_index + 1 < num_chunks
+                    else None
+                )
+
                 seq = tokens[j]  # [n_q, T_gen]
                 eos_mask = seq[0] == eos_id
                 if eos_mask.any():
                     seq = seq[:, : eos_mask.int().argmax().item() + 1]
                 else:
-                    chunk_index = i + j
                     msg = (
-                        f"chunk {chunk_index} (seek={chunk_index * _SEGMENT_DURATION:.1f}s) "
+                        f"chunk {chunk_index} (seek={seek_time:.1f}s) "
                         f"did not emit EOS within {max_gen_len} tokens"
                     )
                     if no_eos_is_ok:
@@ -284,32 +320,101 @@ class TranscriptionModel:
                             msg
                             + " (pass no_eos_is_ok=True / --no-eos-is-ok to downgrade to a warning)"
                         )
-                all_tokens.append(seq)
+
+                token_list = seq[0].tolist()
+                token_list = self._tokenizer._drop_instrument_section(token_list)
+                note_events, tie_note_events, _, _ = self._tokenizer.tokenizer.decode(
+                    token_list, start_time=seek_time
+                )
+
+                yield from builder.process_chunk(
+                    note_events, tie_note_events, seek_time, next_seek_time
+                )
+
+        yield from builder.flush()
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         print(f"[muscriptor] generate total: {time.perf_counter() - t_gen:.2f}s")
-
-        with _timed("decode tokens → notes", timings):
-            notes_dict, _ = self._tokenizer.decode_segmented_track(
-                all_tokens,
-                seek_times,
-                total_duration,
-                _SEGMENT_DURATION,
-            )
-        notes: list[Note] = notes_dict["notes"]
-
-        if output_midi is not None:
-            with _timed("save MIDI", timings):
-                save_midi(notes, output_midi)
-
         print(
             f"[muscriptor] transcribe total: {time.perf_counter() - t_total:.2f}s "
-            f"({len(notes)} notes, {total_duration:.1f}s audio)"
+            f"({total_duration:.1f}s audio)"
         )
 
-        if return_notes:
-            return notes
-        return None
+    # ------------------------------------------------------------------
+    def transcribe_to_midi(
+        self,
+        audio: str | Path | tuple[torch.Tensor, int],
+        use_sampling: bool = False,
+        temperature: float = 1.0,
+        cfg_coef: float = 2.0,
+        instrument_group: str | None = None,
+        dataset_name: str | None = None,
+        batch_size: int | None = None,
+        no_eos_is_ok: bool = False,
+    ) -> bytes:
+        """Same as :meth:`transcribe` but returns a MIDI file as bytes.
+
+        Thin wrapper that consumes the event generator, reassembles Notes,
+        and serializes them.
+        """
+        notes: list[Note] = []
+        open_notes: dict[int, Note] = {}
+        events = self.transcribe(
+            audio,
+            use_sampling=use_sampling,
+            temperature=temperature,
+            cfg_coef=cfg_coef,
+            instrument_group=instrument_group,
+            dataset_name=dataset_name,
+            batch_size=batch_size,
+            no_eos_is_ok=no_eos_is_ok,
+        )
+        for ev in events:
+            if isinstance(ev, NoteStartEvent):
+                is_drum = ev.instrument == "drums"
+                program = (
+                    DRUM_PROGRAM
+                    if is_drum
+                    else self._program_for_instrument(ev.instrument)
+                )
+                note = Note(
+                    is_drum=is_drum,
+                    program=program,
+                    onset=ev.start_time,
+                    offset=ev.start_time,  # patched on NoteEndEvent
+                    pitch=ev.pitch,
+                )
+                open_notes[ev.index] = note
+            else:  # NoteEndEvent
+                note = open_notes.pop(ev.start_event_index)
+                note.offset = ev.end_time
+                notes.append(note)
+
+        # Match the legacy decoder's note-cleanup pass so the MIDI bytes
+        # don't drift from earlier reference outputs.
+        notes = validate_notes(notes, fix=True)
+        notes = trim_overlapping_notes(notes, sort=True)
+        midi = notes_to_midi(notes)
+        buf = io.BytesIO()
+        midi.save(file=buf)
+        return buf.getvalue()
+
+    def _program_for_instrument(self, instrument: str) -> int:
+        """Inverse of `_instrument_for_program` for non-drum instruments."""
+        if not hasattr(self, "_inst_to_program"):
+            group_map = self._tokenizer.group_program_map
+            self._inst_to_program = {
+                name: group_map[gid][0]
+                for name, gid in MT3_FULL_PLUS_GROUP_NAMES.items()
+                if gid in group_map and group_map[gid]
+            }
+        if instrument in self._inst_to_program:
+            return self._inst_to_program[instrument]
+        # fallback for unknown names like "program_42"
+        if instrument.startswith("program_"):
+            return int(instrument.removeprefix("program_"))
+        raise ValueError(f"Unknown instrument name: {instrument!r}")
 
     # ------------------------------------------------------------------
     def _load_wav(

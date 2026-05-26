@@ -4,18 +4,11 @@ Adapted from YourMT3+ (https://github.com/mimbres/YourMT3) and audiocraft_trans.
 """
 
 import logging
-from abc import ABC, abstractmethod
-from collections import Counter
-import torch
 
 from muscriptor.tokenizer.notes import (
     DRUM_PROGRAM,
     NoteEventTokenizer,
     Event,
-    note2note_event,
-    slice_note_events_and_ties,
-    note_event2note,
-    merge_zipped_note_events_and_ties_to_notes,
 )
 
 logger = logging.getLogger(__name__)
@@ -328,46 +321,7 @@ def group_program_map_to_amt_vocab_dict(instrument_group_to_program_map):
     }
 
 
-class MIDITokenizer(ABC):
-    def __init__(
-        self, num_streams: int, instrument_vocabulary: str, drum_vocabulary: str
-    ):
-        self.num_streams = num_streams
-        self.total_streams = num_streams
-        self.error_counter: Counter = Counter()
-        self.instrument_vocabulary = instrument_vocabulary
-        self.group_program_map = get_group_program_map(
-            instrument_vocabulary, misc_programs="SINGLETON_GROUPS"
-        )
-        self.program_group_map = {
-            p: i for i, ps in self.group_program_map.items() for p in ps
-        }
-        self.drum_vocabulary = drum_vocabulary
-        self.drum_group_note_map = _get_drum_group_note_map(drum_vocabulary)
-        self.note_drum_group_map = {
-            p: i for i, ps in self.drum_group_note_map.items() for p in ps
-        }
-        self.program_group_map_for_prefix = None
-
-    @abstractmethod
-    def encode(self, notes_dict): ...
-
-    @abstractmethod
-    def decode(self, tokens, seek_time=0, segment_duration=None): ...
-
-    @abstractmethod
-    def decode_segmented_track(
-        self, tokens, seek_times, track_duration, segment_duration
-    ): ...
-
-    @abstractmethod
-    def get_generation_length(self, duration_sec: float) -> int: ...
-
-    @abstractmethod
-    def get_padding_token(self) -> int: ...
-
-
-class MT3Tokenizer(MIDITokenizer):
+class MT3Tokenizer:
     def __init__(
         self,
         instrument_vocabulary: str = "FULL",
@@ -376,16 +330,11 @@ class MT3Tokenizer(MIDITokenizer):
         add_instrument_section: bool = False,
         modulo_max_shift_steps: bool = False,
         frame_rate: int = 100,
-        **kwargs,
     ):
-        super().__init__(
-            num_streams=1,
-            instrument_vocabulary=instrument_vocabulary,
-            drum_vocabulary=drum_vocabulary,
-        )
         self.group_program_map = get_group_program_map(
             instrument_vocabulary, misc_programs="SINGLETON_GROUPS", is_mt3=True
         )
+        drum_group_note_map = _get_drum_group_note_map(drum_vocabulary)
         self.tokenizer = NoteEventTokenizer(
             max_shift_steps=max_shift_steps,
             frame_rate=frame_rate,
@@ -395,12 +344,10 @@ class MT3Tokenizer(MIDITokenizer):
             program_vocabulary=group_program_map_to_amt_vocab_dict(
                 self.group_program_map
             ),
-            drum_vocabulary=self.drum_group_note_map,
+            drum_vocabulary=drum_group_note_map,
             modulo_max_shift_steps=modulo_max_shift_steps,
         )
         self.add_instrument_section = add_instrument_section
-        self.modulo_max_shift_steps = modulo_max_shift_steps
-        self.training = False
 
         logger.info(f"MT3Tokenizer: {self.tokenizer.num_tokens} tokens")
 
@@ -419,71 +366,3 @@ class MT3Tokenizer(MIDITokenizer):
         except StopIteration:
             drop_until = 0
         return tokens[drop_until:]
-
-    def encode(self, notes_dict):
-        notes = notes_dict["notes"]
-        note_events = note2note_event(notes)
-        note_events, tie_note_events = slice_note_events_and_ties(
-            note_events,
-            start_time=notes_dict["seek_time"],
-            end_time=notes_dict["seek_time"] + notes_dict["duration_sec"],
-        )
-        tokens = self.tokenizer.encode(
-            note_events,
-            tie_note_events=tie_note_events,
-            start_time=notes_dict["seek_time"],
-        )
-        tokens.append(self.tokenizer.eos_id)
-        tokens.append(self.tokenizer.eos_id)
-        tokens_tensor = torch.tensor(tokens).unsqueeze(0)
-        return tokens_tensor, None
-
-    def set_training(self, training: bool):
-        self.training = training
-
-    def decode(self, tokens, seek_time=0, segment_duration=None):
-        assert segment_duration is not None
-        token_list = tokens[0].tolist()
-        decoded_note_events, decoded_tie_note_events, _, error_cnt = (
-            self.tokenizer.decode(
-                self._drop_instrument_section(token_list), start_time=seek_time
-            )
-        )
-        self.error_counter += error_cnt
-        decoded_notes, error_cnt = note_event2note(
-            decoded_note_events,
-            tie_note_events=decoded_tie_note_events,
-            force_onset_before_segment_start=seek_time - 0.01 if seek_time > 0 else 0,
-            force_offset_past_segment_end=seek_time + segment_duration,
-        )
-        self.error_counter += error_cnt
-        notes_dict = {
-            "seek_time": seek_time,
-            "duration_sec": segment_duration,
-            "notes": decoded_notes,
-        }
-        return notes_dict, None
-
-    def decode_segmented_track(
-        self, tokens, seek_times, track_duration, segment_duration
-    ):
-        zipped, error_cnt = self.tokenizer.decode_segments(
-            [self._drop_instrument_section(t[0].tolist()) for t in tokens], seek_times
-        )
-        self.error_counter += error_cnt
-        decoded_notes, error_cnt = merge_zipped_note_events_and_ties_to_notes(
-            zipped, segment_duration=segment_duration
-        )
-        self.error_counter += error_cnt
-        notes_dict = {
-            "seek_time": 0.0,
-            "duration_sec": track_duration,
-            "notes": decoded_notes,
-        }
-        return notes_dict, None
-
-    def get_generation_length(self, duration_sec: float) -> int:
-        return int(384 * duration_sec)
-
-    def get_padding_token(self) -> int:
-        return self.tokenizer.pad_id
