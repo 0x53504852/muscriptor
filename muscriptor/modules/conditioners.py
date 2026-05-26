@@ -9,11 +9,10 @@ Contains only the classes needed to run the transcription model:
 """
 
 import time
-import typing as tp
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
-
+from typing import NamedTuple, Any
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -26,7 +25,7 @@ from muscriptor.utils.sampling import length_to_mask
 ConditionType = tuple[torch.Tensor, torch.Tensor]  # (embedding [B, T, D], mask [B, T])
 
 
-class WavCondition(tp.NamedTuple):
+class WavCondition(NamedTuple):
     wav: torch.Tensor
     length: torch.Tensor
     sample_rate: list[int]
@@ -38,8 +37,8 @@ class WavCondition(tp.NamedTuple):
 class ConditioningAttributes:
     text: dict[str, str | None] = field(default_factory=dict)
     wav: dict[str, WavCondition] = field(default_factory=dict)
-    joint_embed: dict[str, tp.Any] = field(default_factory=dict)
-    symbolic: dict[str, tp.Any] = field(default_factory=dict)
+    joint_embed: dict[str, Any] = field(default_factory=dict)
+    symbolic: dict[str, Any] = field(default_factory=dict)
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -296,7 +295,7 @@ class ConditioningProvider(nn.Module):
             if isinstance(v, MelSpectrogramConditioner)
         ]
 
-    def tokenize(self, inputs: list[ConditioningAttributes]) -> dict[str, tp.Any]:
+    def tokenize(self, inputs: list[ConditioningAttributes]) -> dict[str, Any]:
         output = {}
         # Collate text conditions
         text_batch: dict[str, list[str | None]] = defaultdict(list)
@@ -314,7 +313,7 @@ class ConditioningProvider(nn.Module):
 
         return output
 
-    def forward(self, tokenized: dict[str, tp.Any]) -> dict[str, ConditionType]:
+    def forward(self, tokenized: dict[str, Any]) -> dict[str, ConditionType]:
         output = {}
         for attribute, inputs in tokenized.items():
             condition, mask = self.conditioners[attribute](inputs)

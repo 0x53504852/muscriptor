@@ -11,12 +11,11 @@ at known offsets.  No magic context manager, no implicit per-module storage.
 """
 
 from abc import ABC, abstractmethod
-import typing as tp
-
+from typing import Any
 from torch import nn
 
 
-State = dict[str, tp.Any]
+State = dict[str, Any]
 ModelState = dict[str, State]
 
 

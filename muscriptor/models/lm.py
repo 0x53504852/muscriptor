@@ -5,7 +5,7 @@ Adapted from audiocraft/models/lm.py.
 
 import logging
 import time
-import typing as tp
+from collections.abc import Callable
 
 import torch
 from torch import nn
@@ -336,7 +336,7 @@ class LMModel(nn.Module):
         top_k: int = 0,
         top_p: float = 0.0,
         cfg_coef: float | None = None,
-        callback: tp.Callable[[int, int], None] | None = None,
+        callback: Callable[[int, int], None] | None = None,
         early_stop_on_token: int | None = None,
     ) -> torch.Tensor:
         assert not self.training
