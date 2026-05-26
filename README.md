@@ -126,3 +126,43 @@ class TranscriptionModel:
 ```bash
 muscriptor transcribe audio.wav -o out.mid
 ```
+
+## Web UI
+
+A browser client is included under `web/`. The FastAPI server serves both
+the UI and a POST `/transcribe` endpoint that streams `NoteStart`/`NoteEnd`
+events back as Server-Sent Events. The UI accepts a WAV via drag-and-drop,
+renders a live piano roll while events arrive, auto-plays once enough notes
+are available, and crossfades between the original WAV and the synthesized
+MIDI playback.
+
+### One-time setup
+
+```bash
+uv sync
+cd web && npm install && npm run build && cd ..
+```
+
+`npm run build` is required once — the FastAPI server auto-mounts
+`web/dist/` if it exists.
+
+### Run
+
+```bash
+uv run muscriptor serve \
+    --model ./muscriptor_weights_8f59580c_750.safetensors \
+    --device cuda \
+    --host 0.0.0.0 \
+    --port 8000
+```
+
+Then open <http://127.0.0.1:8000/> (or the LAN address of the host) and drop
+a WAV onto the page.
+
+- Drop `--device cuda` if running CPU-only.
+- `--host 0.0.0.0` makes it reachable on the LAN; the default `127.0.0.1`
+  is local-only.
+- The first transcription downloads ~5 MB of General-MIDI soundfonts and
+  TR-808 drum samples from `gleitz.github.io` and `smpldsnds.github.io`
+  (cached by the browser thereafter), so working outbound HTTPS is
+  required on the first run.

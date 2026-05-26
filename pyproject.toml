@@ -18,6 +18,10 @@ dependencies = [
     "safetensors>=0.4",
     "huggingface_hub>=0.13",
     "typer>=0.10",
+    "fastapi>=0.136.3",
+    "uvicorn[standard]>=0.48.0",
+    "httpx>=0.28.1",
+    "python-multipart>=0.0.29",
 ]
 
 [project.optional-dependencies]
@@ -32,4 +36,5 @@ packages = ["muscriptor"]
 [dependency-groups]
 dev = [
     "pre-commit>=4.3.0",
+    "pytest>=9.0.3",
 ]

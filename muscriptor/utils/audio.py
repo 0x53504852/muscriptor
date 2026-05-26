@@ -10,13 +10,19 @@ import torch
 from scipy.signal import resample_poly
 
 
-def _read_wav_file(path: str) -> tuple[torch.Tensor, int]:
+def _read_wav_file(source) -> tuple[torch.Tensor, int]:
     """Load a PCM WAV file using the stdlib `wave` module.
+
+    `source` may be a filesystem path or a binary file-like object.
 
     Returns:
         (wav, sr) where wav has shape [C, T] and is float32 in [-1, 1].
     """
-    with wave.open(str(path), "rb") as wf:
+    if hasattr(source, "read"):
+        opened = wave.open(source, "rb")
+    else:
+        opened = wave.open(str(source), "rb")
+    with opened as wf:
         n_channels = wf.getnchannels()
         sr = wf.getframerate()
         sampwidth = wf.getsampwidth()

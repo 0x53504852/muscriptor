@@ -141,8 +141,27 @@ def transcribe(
 
 
 @app.command()
-def serve():
-    pass
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
+    port: int = typer.Option(8000, "--port", help="Port to listen on"),
+    model_path: Path | None = typer.Option(
+        None, "--model", "-m", help="Path to safetensors weights file"
+    ),
+    device: str = typer.Option(
+        "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
+    ),
+):
+    """Run the HTTP transcription server (POST /transcribe → SSE event stream)."""
+    import uvicorn
+
+    from muscriptor.server import create_app
+
+    _device = None if device == "auto" else device
+    typer.echo("Loading model…")
+    model = TranscriptionModel.load_model(weights_path=model_path, device=_device)
+    web_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
+    fastapi_app = create_app(model, web_dir=web_dir if web_dir.is_dir() else None)
+    uvicorn.run(fastapi_app, host=host, port=port)
 
 
 @app.command()
