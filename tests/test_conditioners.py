@@ -6,11 +6,9 @@ from muscriptor.modules.conditioners import (
     ConditioningAttributes,
     WavCondition,
     ConditioningProvider,
-    ConditionFuser,
     MelSpectrogramConditioner,
     ClassConditioner,
-    ClassifierFreeGuidanceDropout,
-    nullify_condition,
+    nullify_all_conditions,
     nullify_wav,
 )
 
@@ -46,18 +44,8 @@ def test_conditioning_attributes_properties():
 
 
 # ---------------------------------------------------------------------------
-# nullify_condition / nullify_wav
+# nullify_wav
 # ---------------------------------------------------------------------------
-
-
-def test_nullify_condition_zeros_embedding():
-    # nullify_condition collapses the time dim to 1 and zeros the values
-    embed = torch.randn(2, 5, 8)
-    mask = torch.ones(2, 5, dtype=torch.bool)
-    null_embed, null_mask = nullify_condition((embed, mask), dim=1)
-    assert null_embed.shape == (2, 1, 8)
-    assert null_embed.abs().sum() == 0.0
-    assert null_mask.shape == (2, 1)
 
 
 def test_nullify_wav_zeros_waveform():
@@ -162,57 +150,19 @@ def test_conditioning_provider_tokenize_and_forward():
 
 
 # ---------------------------------------------------------------------------
-# ClassifierFreeGuidanceDropout
+# nullify_all_conditions
 # ---------------------------------------------------------------------------
 
 
-def test_cfg_dropout_null_all_conditions():
-    dropout = ClassifierFreeGuidanceDropout(p=1.0)
+def test_nullify_all_conditions():
     wav = WavCondition(
         wav=torch.randn(1, 1, 1600),
         length=torch.tensor([1600]),
         sample_rate=[16000],
     )
-    attrs = [ConditioningAttributes(wav={"audio": wav})]
-    result = dropout(attrs)
-    # All wav conditions should be nullified (zero length)
+    attrs = [ConditioningAttributes(wav={"audio": wav}, text={"prompt": "hi"})]
+    result = nullify_all_conditions(attrs)
     assert result[0].wav["audio"].length.item() == 0
-
-
-def test_cfg_dropout_p_zero_keeps_conditions():
-    dropout = ClassifierFreeGuidanceDropout(p=0.0)
-    wav = WavCondition(
-        wav=torch.randn(1, 1, 1600),
-        length=torch.tensor([1600]),
-        sample_rate=[16000],
-    )
-    attrs = [ConditioningAttributes(wav={"audio": wav})]
-    result = dropout(attrs)
-    assert result[0].wav["audio"].length.item() == 1600
-
-
-# ---------------------------------------------------------------------------
-# ConditionFuser
-# ---------------------------------------------------------------------------
-
-
-def test_condition_fuser_prepend():
-    fuser = ConditionFuser(fuse2cond={"prepend": ["mel"]})
-    x = torch.randn(2, 6, 16)
-    cond_embed = torch.randn(2, 3, 16)
-    cond_mask = torch.ones(2, 3, dtype=torch.bool)
-    conditions = {"mel": (cond_embed, cond_mask)}
-    out, cross_out, prepend_len = fuser(x, conditions)
-    assert prepend_len == 3
-    assert out.shape == (2, 9, 16)  # prepend 3 + original 6
-
-
-def test_condition_fuser_sum():
-    fuser = ConditionFuser(fuse2cond={"sum": ["mel"]})
-    x = torch.randn(2, 6, 16)
-    cond_embed = torch.randn(2, 6, 16)
-    cond_mask = torch.ones(2, 6, dtype=torch.bool)
-    conditions = {"mel": (cond_embed, cond_mask)}
-    out, cross_out, prepend_len = fuser(x, conditions)
-    assert prepend_len == 0
-    assert out.shape == (2, 6, 16)
+    assert result[0].text["prompt"] is None
+    # original is untouched (deepcopy)
+    assert attrs[0].wav["audio"].length.item() == 1600

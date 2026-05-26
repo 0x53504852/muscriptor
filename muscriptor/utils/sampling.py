@@ -1,12 +1,9 @@
 """Sampling utilities for autoregressive generation."""
 
-import typing as tp
 import torch
 
 
-def length_to_mask(
-    lengths: torch.Tensor, max_len: tp.Optional[int] = None
-) -> torch.Tensor:
+def length_to_mask(lengths: torch.Tensor, max_len: int | None = None) -> torch.Tensor:
     """Convert a tensor of sequence lengths to a boolean mask."""
     assert len(lengths.shape) == 1
     final_length = int(lengths.max().item()) if not max_len else max_len
@@ -46,6 +43,17 @@ def sample_top_p(probs: torch.Tensor, p: float, num_samples: int = 1) -> torch.T
     return torch.gather(probs_idx, -1, next_token)
 
 
+def sample_from_probs(
+    probs: torch.Tensor, top_p: float = 0.0, top_k: int = 0
+) -> torch.Tensor:
+    """Sample one token from probs, optionally filtered by top-p or top-k."""
+    if top_p > 0.0:
+        return sample_top_p(probs, top_p)
+    if top_k > 0:
+        return sample_top_k(probs, top_k)
+    return multinomial(probs, num_samples=1)
+
+
 def sample_stratified(
     probs: torch.Tensor,
     special_token: int,
@@ -74,12 +82,7 @@ def sample_stratified(
         log_new = torch.log(new_probs.clamp(min=eps)) / second_temp
         new_probs = torch.softmax(log_new, dim=-1)
 
-    if top_p > 0.0:
-        next_token = sample_top_p(new_probs, top_p)
-    elif top_k > 0:
-        next_token = sample_top_k(new_probs, top_k)
-    else:
-        next_token = multinomial(new_probs, num_samples=1)
+    next_token = sample_from_probs(new_probs, top_p=top_p, top_k=top_k)
 
     return torch.where(
         next_token_is_special, torch.full_like(next_token, special_token), next_token

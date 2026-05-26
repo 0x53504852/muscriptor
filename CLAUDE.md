@@ -7,7 +7,7 @@ live at the repo root and are kept around for exactly this purpose.
 ```bash
 uv run muscriptor transcribe \
     --instruments acoustic_piano,acoustic_guitar \
-    --model ./muscriptor_weights_0ac4ce03_900.safetensors \
+    --model ./muscriptor_weights_8f59580c_750.safetensors \
     piano-guitar.wav -o /tmp/check.mid
 ```
 

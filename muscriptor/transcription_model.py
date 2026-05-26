@@ -5,18 +5,20 @@ import dataclasses
 import math
 import re
 import time
-import typing as tp
+import warnings
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 
+from safetensors.torch import load_file
+
 from muscriptor.models.lm import LMModel, TorchAutocast
+from muscriptor.utils.download import download_if_necessary
 from muscriptor.modules.conditioners import (
     MelSpectrogramConditioner,
     ClassConditioner,
     ConditioningProvider,
-    ConditionFuser,
     ConditioningAttributes,
     WavCondition,
 )
@@ -27,7 +29,7 @@ from muscriptor.utils.midi import save_midi
 
 
 @contextlib.contextmanager
-def _timed(label: str, store: tp.Optional[tp.List[tp.Tuple[str, float]]] = None):
+def _timed(label: str, store: list[tuple[str, float]] | None = None):
     """Print and (optionally) record how long a block of work takes."""
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -58,7 +60,7 @@ class _ModelConfig:
 
 
 # Per-checkpoint configs extracted from .hydra/config.yaml → transformer_lm.
-_CONFIGS: tp.Dict[str, _ModelConfig] = {
+_CONFIGS: dict[str, _ModelConfig] = {
     "01684fbb": _ModelConfig(dim=1536, num_heads=24, num_layers=48, card=1395),
     "0ac4ce03": _ModelConfig(dim=768, num_heads=12, num_layers=14, card=1393),
     "8f59580c": _ModelConfig(dim=1024, num_heads=16, num_layers=24, card=1395),
@@ -100,46 +102,23 @@ def _build_model(device: torch.device, cfg: _ModelConfig = _DEFAULT_CONFIG) -> L
         device=device,
     )
 
-    fuser = ConditionFuser(
-        fuse2cond={
-            "prepend": ["self_wav", "instrument_group", "dataset_name"],
-            "cross": [],
-            "sum": [],
-            "input_interpolate": [],
-            "streaming_sum": [],
-        }
-    )
-
     autocast = None
     if device.type == "cuda":
         autocast = TorchAutocast(enabled=True, device_type="cuda", dtype=torch.float16)
 
     model = LMModel(
         condition_provider=condition_provider,
-        fuser=fuser,
         delays=[0],
         n_q=1,
         card=cfg.card,
         dim=cfg.dim,
         num_heads=cfg.num_heads,
         hidden_scale=4,
-        norm="layer_norm",
-        norm_emb=False,
-        weight_init="gaussian",
-        depthwise_init="current",
-        zero_bias_init=True,
-        cfg_dropout=0.0,
         cfg_coef=1.0,
         autocast=autocast,
         # StreamingTransformer kwargs (forwarded via **kwargs)
         num_layers=cfg.num_layers,
-        causal=True,
-        positional_embedding="sin",
         max_period=10000,
-        cross_attention=False,
-        context=None,
-        layer_scale=None,
-        checkpointing="none",
         device=device,
     )
     return model
@@ -163,8 +142,8 @@ class TranscriptionModel:
     @classmethod
     def load_model(
         cls,
-        weights_path: tp.Optional[tp.Union[str, Path]] = None,
-        device: tp.Optional[tp.Union[str, torch.device]] = None,
+        weights_path: str | Path | None = None,
+        device: str | torch.device | None = None,
     ) -> "TranscriptionModel":
         """Load model weights and return a ready-to-use TranscriptionModel.
 
@@ -179,15 +158,11 @@ class TranscriptionModel:
             device = torch.device(device)
 
         if weights_path is None:
-            from muscriptor.utils.download import download_if_necessary
-
             weights_path = download_if_necessary(_HF_URL)
 
         weights_path = Path(weights_path)
         model = _build_model(device, _config_for_weights(weights_path))
         model.eval()
-
-        from safetensors.torch import load_file
 
         state_dict = load_file(weights_path, device=str(device))
         model.load_state_dict(state_dict)
@@ -206,16 +181,18 @@ class TranscriptionModel:
     # ------------------------------------------------------------------
     def transcribe(
         self,
-        audio: tp.Union[str, Path, torch.Tensor],
-        sample_rate: tp.Optional[int] = None,
-        output_midi: tp.Optional[tp.Union[str, Path]] = None,
+        audio: str | Path | torch.Tensor,
+        sample_rate: int | None = None,
+        output_midi: str | Path | None = None,
         return_notes: bool = False,
         use_sampling: bool = False,
         temperature: float = 1.0,
         cfg_coef: float = 2.0,
-        instrument_group: tp.Optional[str] = None,
-        dataset_name: tp.Optional[str] = None,
-    ) -> tp.Optional[tp.List[Note]]:
+        instrument_group: str | None = None,
+        dataset_name: str | None = None,
+        batch_size: int = 16,
+        no_eos_is_ok: bool = False,
+    ) -> list[Note] | None:
         """Transcribe audio to MIDI / notes.
 
         Audio longer than _SEGMENT_DURATION seconds is split into non-overlapping
@@ -237,7 +214,7 @@ class TranscriptionModel:
         Returns:
             List of :class:`Note` objects when return_notes is True, else None.
         """
-        timings: tp.List[tp.Tuple[str, float]] = []
+        timings: list[tuple[str, float]] = []
         t_total = time.perf_counter()
 
         with _timed("load audio", timings):
@@ -247,15 +224,15 @@ class TranscriptionModel:
 
         segment_samples = int(_SEGMENT_DURATION * _SAMPLE_RATE)
         num_chunks = math.ceil(total_samples / segment_samples)
-        max_gen_len = self._tokenizer.get_generation_length(_SEGMENT_DURATION)
+        max_gen_len = 512
         eos_id = self._tokenizer.tokenizer.eos_id
         print(
             f"[muscriptor] audio: {total_duration:.1f}s → {num_chunks} chunk(s) of {_SEGMENT_DURATION}s"
         )
 
         with _timed("build conditions", timings):
-            all_conditions: tp.List[ConditioningAttributes] = []
-            seek_times: tp.List[float] = []
+            all_conditions: list[ConditioningAttributes] = []
+            seek_times: list[float] = []
             for i in range(num_chunks):
                 start = i * segment_samples
                 chunk = wav[:, start : start + segment_samples]
@@ -266,13 +243,12 @@ class TranscriptionModel:
                 )
                 seek_times.append(i * _SEGMENT_DURATION)
 
-        # Generate in batches of 16 (matching the evaluation solver).
-        all_tokens: tp.List[torch.Tensor] = []
+        all_tokens: list[torch.Tensor] = []
         t_gen = time.perf_counter()
-        num_batches = math.ceil(len(all_conditions) / 16)
-        for i in range(0, len(all_conditions), 16):
-            batch_conditions = all_conditions[i : i + 16]
-            batch_idx = i // 16 + 1
+        num_batches = math.ceil(len(all_conditions) / batch_size)
+        for i in range(0, len(all_conditions), batch_size):
+            batch_conditions = all_conditions[i : i + batch_size]
+            batch_idx = i // batch_size + 1
             with _timed(
                 f"generate batch {batch_idx}/{num_batches} ({len(batch_conditions)} chunks)",
                 timings,
@@ -295,6 +271,19 @@ class TranscriptionModel:
                 eos_mask = seq[0] == eos_id
                 if eos_mask.any():
                     seq = seq[:, : eos_mask.int().argmax().item() + 1]
+                else:
+                    chunk_index = i + j
+                    msg = (
+                        f"chunk {chunk_index} (seek={chunk_index * _SEGMENT_DURATION:.1f}s) "
+                        f"did not emit EOS within {max_gen_len} tokens"
+                    )
+                    if no_eos_is_ok:
+                        warnings.warn(msg, RuntimeWarning, stacklevel=2)
+                    else:
+                        raise RuntimeError(
+                            msg
+                            + " (pass no_eos_is_ok=True / --no-eos-is-ok to downgrade to a warning)"
+                        )
                 all_tokens.append(seq)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -307,7 +296,7 @@ class TranscriptionModel:
                 total_duration,
                 _SEGMENT_DURATION,
             )
-        notes: tp.List[Note] = notes_dict["notes"]
+        notes: list[Note] = notes_dict["notes"]
 
         if output_midi is not None:
             with _timed("save MIDI", timings):
@@ -324,7 +313,7 @@ class TranscriptionModel:
 
     # ------------------------------------------------------------------
     def _load_wav(
-        self, audio: tp.Union[str, Path, torch.Tensor], sample_rate: tp.Optional[int]
+        self, audio: str | Path | torch.Tensor, sample_rate: int | None
     ) -> torch.Tensor:
         """Return mono float32 waveform at 16 kHz, shape [1, T]."""
         if isinstance(audio, (str, Path)):
@@ -344,9 +333,9 @@ class TranscriptionModel:
     def _build_conditions(
         self,
         wav: torch.Tensor,
-        instrument_group: tp.Optional[str] = None,
-        dataset_name: tp.Optional[str] = None,
-    ) -> tp.List[ConditioningAttributes]:
+        instrument_group: str | None = None,
+        dataset_name: str | None = None,
+    ) -> list[ConditioningAttributes]:
         """Build a single-element list of ConditioningAttributes for one 5-second chunk."""
         T = wav.shape[-1]
         wav_3d = wav.unsqueeze(0)  # [1, 1, T]

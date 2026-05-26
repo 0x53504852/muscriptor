@@ -7,7 +7,7 @@ name = "muscriptor"
 version = "0.1.0"
 description = "Audio-to-MIDI transcription using a transformer language model"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     "torch>=2.0,<2.7",

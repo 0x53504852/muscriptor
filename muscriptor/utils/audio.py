@@ -2,7 +2,6 @@
 other formats fall back to `soundfile` (optional dependency)."""
 
 import math
-import typing as tp
 import wave
 from pathlib import Path
 
@@ -11,7 +10,7 @@ import torch
 from scipy.signal import resample_poly
 
 
-def _read_wav_file(path: str) -> tp.Tuple[torch.Tensor, int]:
+def _read_wav_file(path: str) -> tuple[torch.Tensor, int]:
     """Load a PCM WAV file using the stdlib `wave` module.
 
     Returns:
@@ -47,7 +46,7 @@ def _read_wav_file(path: str) -> tp.Tuple[torch.Tensor, int]:
     return torch.from_numpy(np.ascontiguousarray(data.T)), sr
 
 
-def _read_non_wav_file(path: str) -> tp.Tuple[torch.Tensor, int]:
+def _read_non_wav_file(path: str) -> tuple[torch.Tensor, int]:
     """Load a non-WAV audio file using `soundfile` (optional dependency).
 
     Returns:
@@ -85,7 +84,7 @@ def resample(
     return torch.from_numpy(np.ascontiguousarray(out)).to(device)
 
 
-def load_audio(path: tp.Union[str, Path], target_sr: int = 16000) -> torch.Tensor:
+def load_audio(path: str | Path, target_sr: int = 16000) -> torch.Tensor:
     """Load an audio file and return a mono float32 tensor at target_sr.
 
     WAV files are read with the stdlib `wave` module. Other formats require

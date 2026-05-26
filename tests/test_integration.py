@@ -182,6 +182,46 @@ def test_transcribe_midi_is_valid(transcription_model, silence):
         assert len(midi.tracks) > 0
 
 
+def test_cli_json_output(transcription_model, silence, monkeypatch):
+    """End-to-end: `muscriptor transcribe --format json` writes a valid notes list."""
+    import json
+    import wave
+
+    from typer.testing import CliRunner
+
+    from muscriptor import main as cli_main
+
+    monkeypatch.setattr(
+        cli_main.TranscriptionModel,
+        "load_model",
+        classmethod(lambda cls, **kw: transcription_model),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        wav_path = Path(tmpdir) / "in.wav"
+        with wave.open(str(wav_path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(_SAMPLE_RATE)
+            w.writeframes(b"\x00\x00" * (_SAMPLE_RATE * _DURATION_SEC))
+        out_path = Path(tmpdir) / "out.json"
+
+        result = CliRunner().invoke(
+            cli_main.app,
+            ["transcribe", str(wav_path), "-o", str(out_path), "--format", "json"],
+        )
+        assert result.exit_code == 0, result.output
+
+        assert out_path.exists()
+        notes = json.loads(out_path.read_text())
+        assert isinstance(notes, list)
+        for n in notes:
+            assert set(n.keys()) == {"is_drum", "program", "onset", "offset", "pitch"}
+            assert isinstance(n["is_drum"], bool)
+            assert 0 <= n["pitch"] <= 127
+            assert n["offset"] >= n["onset"]
+
+
 # ---------------------------------------------------------------------------
 # transcribe — sampling vs greedy
 # ---------------------------------------------------------------------------

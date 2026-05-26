@@ -1,13 +1,13 @@
 """Weight download utility with caching in ~/.cache/muscriptor/."""
 
-import typing as tp
+import urllib.request
 from pathlib import Path
 
 
 _CACHE_DIR = Path.home() / ".cache" / "muscriptor"
 
 
-def download_if_necessary(url: str, filename: tp.Optional[str] = None) -> Path:
+def download_if_necessary(url: str, filename: str | None = None) -> Path:
     """Download url to cache dir if not already present.
 
     Args:
@@ -50,8 +50,6 @@ def download_if_necessary(url: str, filename: tp.Optional[str] = None) -> Path:
             return Path(cached)
 
     # Generic download fallback
-    import urllib.request
-
     print(f"Downloading {filename} …")
     urllib.request.urlretrieve(url, dest)
     return dest

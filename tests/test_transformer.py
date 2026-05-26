@@ -1,51 +1,12 @@
 """Tests for muscriptor/modules/transformer.py — CPU only, small tensors."""
 
-import pytest
 import torch
 
+from muscriptor.modules.streaming import increment_steps, init_states
 from muscriptor.modules.transformer import (
-    create_norm_fn,
     create_sin_embedding,
     StreamingTransformer,
-    LayerNormF32,
-    RMSNorm,
-    KVCache,
 )
-
-
-# ---------------------------------------------------------------------------
-# Normalization helpers
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "norm_type",
-    [
-        "layer_norm",
-        "layer_norm_f32",
-        "rms_norm",
-        "rms_norm_f32",
-    ],
-)
-def test_create_norm_fn_forward(norm_type):
-    dim = 16
-    norm = create_norm_fn(norm_type, dim)
-    x = torch.randn(2, 5, dim)
-    out = norm(x)
-    assert out.shape == x.shape
-
-
-def test_layer_norm_f32_output_dtype():
-    norm = LayerNormF32(8)
-    x = torch.randn(2, 8).to(torch.float16)
-    out = norm(x.float())
-    assert out.dtype == torch.float32
-
-
-def test_rms_norm_output_shape():
-    norm = RMSNorm(12)
-    x = torch.randn(3, 7, 12)
-    assert norm(x).shape == x.shape
 
 
 # ---------------------------------------------------------------------------
@@ -74,38 +35,12 @@ def test_create_sin_embedding_different_positions():
 
 
 # ---------------------------------------------------------------------------
-# KVCache
-# ---------------------------------------------------------------------------
-
-
-def test_kvcache_complete_shape():
-    cache = KVCache(
-        batch_size=2,
-        num_heads=2,
-        dim_per_head=4,
-        device=torch.device("cpu"),
-        dtype=torch.float32,
-    )
-    k = torch.randn(2, 2, 1, 4)
-    v = torch.randn(2, 2, 1, 4)
-    k_out, v_out = cache.complete(k, v)
-    assert k_out.shape[-1] == 4
-    assert k_out.shape[0] == 2
-
-
-# ---------------------------------------------------------------------------
 # StreamingTransformer forward
 # ---------------------------------------------------------------------------
 
 
 def _make_transformer(**kwargs):
-    defaults = dict(
-        d_model=32,
-        num_heads=2,
-        num_layers=2,
-        dim_feedforward=64,
-        causal=True,
-    )
+    defaults = dict(d_model=32, num_heads=2, num_layers=2, dim_feedforward=64)
     defaults.update(kwargs)
     return StreamingTransformer(**defaults)
 
@@ -119,50 +54,33 @@ def test_streaming_transformer_output_shape():
     assert out.shape == (2, 10, 32)
 
 
-def test_streaming_transformer_non_causal():
-    model = _make_transformer(causal=False)
-    model.eval()
-    x = torch.randn(1, 8, 32)
-    with torch.no_grad():
-        out = model(x)
-    assert out.shape == (1, 8, 32)
-
-
-def test_streaming_transformer_with_context():
-    model = _make_transformer(context=5)
-    model.eval()
-    x = torch.randn(1, 12, 32)
-    with torch.no_grad():
-        out = model(x)
-    assert out.shape == (1, 12, 32)
-
-
 def test_streaming_transformer_streaming_mode():
-    """Feed tokens one at a time in streaming mode; check output shape is correct."""
+    """Feed tokens one at a time with explicit state; check output shape."""
     model = _make_transformer()
     model.eval()
     x = torch.randn(1, 6, 32)
 
+    model_state = init_states(model, batch_size=1, sequence_length=x.shape[1])
+    streaming_outs = []
     with torch.no_grad():
-        with model.streaming():
-            streaming_outs = []
-            for t in range(x.shape[1]):
-                out_t = model(x[:, t : t + 1, :])
-                streaming_outs.append(out_t)
-        streaming_out = torch.cat(streaming_outs, dim=1)
+        for t in range(x.shape[1]):
+            out_t = model(x[:, t : t + 1, :], model_state=model_state)
+            streaming_outs.append(out_t)
+            increment_steps(model, model_state, increment=1)
+    streaming_out = torch.cat(streaming_outs, dim=1)
 
     assert streaming_out.shape == (1, 6, 32)
 
 
-def test_streaming_transformer_reset():
+def test_streaming_transformer_fresh_state():
     model = _make_transformer()
     model.eval()
-    with model.streaming():
-        x = torch.randn(1, 3, 32)
-        with torch.no_grad():
-            model(x)
-        model.reset_streaming()
-        # After reset, streaming from scratch should still work
-        with torch.no_grad():
-            out = model(x)
+    x = torch.randn(1, 3, 32)
+    state = init_states(model, batch_size=1, sequence_length=x.shape[1])
+    with torch.no_grad():
+        model(x, model_state=state)
+    # Allocating a new state starts from scratch.
+    state = init_states(model, batch_size=1, sequence_length=x.shape[1])
+    with torch.no_grad():
+        out = model(x, model_state=state)
     assert out.shape == (1, 3, 32)

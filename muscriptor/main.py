@@ -1,18 +1,38 @@
 """CLI for muscriptor: audio → MIDI transcription."""
 
+import dataclasses
+import json
+from enum import Enum
 from pathlib import Path
-import typing as tp
 
 import typer
 
+from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
+from muscriptor.transcription_model import TranscriptionModel
+
 app = typer.Typer(add_completion=False, help="muscriptor — audio-to-MIDI transcription")
+
+
+class OutputFormat(str, Enum):
+    midi = "midi"
+    json = "json"
 
 
 @app.command()
 def transcribe(
     audio_file: Path = typer.Argument(..., help="Input audio file (wav, mp3, flac, …)"),
-    output: tp.Optional[Path] = typer.Option(
-        None, "--output", "-o", help="Output MIDI file path (default: <audio_file>.mid)"
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output file path (default: <audio_file>.<ext> where ext matches --format)",
+    ),
+    format: OutputFormat = typer.Option(
+        OutputFormat.midi,
+        "--format",
+        "-f",
+        help="Output format: midi (default) or json",
+        case_sensitive=False,
     ),
     notes: bool = typer.Option(False, "--notes", help="Print decoded notes to stdout"),
     sampling: bool = typer.Option(
@@ -24,13 +44,24 @@ def transcribe(
     cfg_coef: float = typer.Option(
         2.0, "--cfg-coef", help="Classifier-free guidance coefficient"
     ),
-    model_path: tp.Optional[Path] = typer.Option(
+    model_path: Path | None = typer.Option(
         None, "--model", "-m", help="Path to safetensors weights file"
     ),
     device: str = typer.Option(
         "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
     ),
-    instruments: tp.Optional[str] = typer.Option(
+    batch_size: int = typer.Option(
+        16,
+        "--batch-size",
+        "-b",
+        help="Batch size for generation (number of 5s chunks per forward pass)",
+    ),
+    no_eos_is_ok: bool = typer.Option(
+        False,
+        "--no-eos-is-ok",
+        help="If set, a chunk failing to emit EOS within max_gen_len produces a warning instead of an error",
+    ),
+    instruments: str | None = typer.Option(
         None,
         "--instruments",
         help=(
@@ -41,10 +72,7 @@ def transcribe(
     ),
 ):
     """Transcribe an audio file to MIDI."""
-    from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
-    from muscriptor.transcription_model import TranscriptionModel
-
-    instrument_group: tp.Optional[str] = None
+    instrument_group: str | None = None
     if instruments is not None:
         names = [n.strip() for n in instruments.split(",") if n.strip()]
         unknown = [n for n in names if n not in MT3_FULL_PLUS_GROUP_NAMES]
@@ -62,7 +90,9 @@ def transcribe(
         raise typer.Exit(1)
 
     if output is None:
-        output = audio_file.with_suffix(".mid")
+        output = audio_file.with_suffix(
+            ".mid" if format == OutputFormat.midi else ".json"
+        )
 
     _device = None if device == "auto" else device
 
@@ -75,15 +105,22 @@ def transcribe(
     typer.echo(f"Transcribing {audio_file} …")
     result = model.transcribe(
         audio=audio_file,
-        output_midi=output,
-        return_notes=notes,
+        output_midi=output if format == OutputFormat.midi else None,
+        return_notes=notes or format == OutputFormat.json,
         use_sampling=sampling,
         temperature=temperature,
         cfg_coef=cfg_coef,
         instrument_group=instrument_group,
+        batch_size=batch_size,
+        no_eos_is_ok=no_eos_is_ok,
     )
 
-    typer.echo(f"Saved MIDI to {output}")
+    if format == OutputFormat.json:
+        assert result is not None
+        output.write_text(json.dumps([dataclasses.asdict(n) for n in result], indent=2))
+        typer.echo(f"Saved JSON to {output}")
+    else:
+        typer.echo(f"Saved MIDI to {output}")
 
     if notes and result is not None:
         typer.echo(f"\n{len(result)} notes:")
@@ -103,8 +140,6 @@ def serve():
 @app.command()
 def list_instruments():
     """List the instrument group names accepted by --instruments."""
-    from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
-
     for name in MT3_FULL_PLUS_GROUP_NAMES:
         typer.echo(name)
 

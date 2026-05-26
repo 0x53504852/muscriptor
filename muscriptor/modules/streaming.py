@@ -1,113 +1,69 @@
-"""Streaming module API that should be implemented by all Streaming components."""
+"""Stateful module API.
 
-from contextlib import contextmanager
+Each :class:`StatefulModule` exposes :meth:`init_state` returning a dict of
+per-module tensors. :func:`init_states` walks an ``nn.Module`` tree, calls
+``init_state`` on every stateful submodule, and returns a ``dict[name -> state]``
+that callers thread through ``forward`` via a ``model_state`` argument.
+
+State is mutated only by :meth:`increment_step` (called explicitly via
+:func:`increment_steps`) and by ``forward`` writing into preallocated buffers
+at known offsets.  No magic context manager, no implicit per-module storage.
+"""
+
+from abc import ABC, abstractmethod
 import typing as tp
+
 from torch import nn
-import torch
 
 
-State = tp.Dict[str, tp.Any]
+State = dict[str, tp.Any]
+ModelState = dict[str, State]
 
 
-class StreamingModule(nn.Module):
-    """Common API for streaming components.
+class StatefulModule(ABC, nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._module_absolute_name: str | None = None
 
-    Each streaming component has a streaming state, which is just a dict[str, Tensor].
-    By convention, the first dim of each tensor must be the batch size.
-    Don't use dots in the key names, as this would clash with submodules
-    (like in state_dict).
+    @abstractmethod
+    def init_state(self, batch_size: int, sequence_length: int) -> State:
+        raise NotImplementedError
 
-    If `self._is_streaming` is True, the component should use and remember
-    the proper state inside `self._streaming_state`.
+    def increment_step(self, state: State, increment: int = 1) -> None:
+        pass
 
-    To set a streaming component in streaming state, use
-
-        with module.streaming():
-            ...
-
-    This will automatically reset the streaming state when exiting the context manager.
-    This also automatically propagates to all streaming children module.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._streaming_state: State = {}
-        self._is_streaming = False
-
-    def _apply_named_streaming(self, fn: tp.Any):
-        for name, module in self.named_modules():
-            if isinstance(module, StreamingModule):
-                fn(name, module)
-
-    def _set_streaming(self, streaming: bool):
-        def _set_streaming(name, module):
-            module._is_streaming = streaming
-
-        self._apply_named_streaming(_set_streaming)
-
-    @contextmanager
-    def streaming(self):
-        """Context manager to enter streaming mode. Reset streaming state on exit."""
-        self._set_streaming(True)
-        try:
-            yield
-        finally:
-            self._set_streaming(False)
-            self.reset_streaming()
-
-    def reset_streaming(self):
-        """Reset the streaming state."""
-
-        def _reset(name: str, module: StreamingModule):
-            module._streaming_state.clear()
-
-        self._apply_named_streaming(_reset)
-
-    def get_streaming_state(self) -> State:
-        """Return the streaming state, including that of sub-modules."""
-        state: State = {}
-
-        def _add(name: str, module: StreamingModule):
-            if name:
-                name += "."
-            for key, value in module._streaming_state.items():
-                state[name + key] = value
-
-        self._apply_named_streaming(_add)
-        return state
-
-    def set_streaming_state(self, state: State):
-        """Set the streaming state, including that of sub-modules."""
-        state = dict(state)
-
-        def _set(name: str, module: StreamingModule):
-            if name:
-                name += "."
-            module._streaming_state.clear()
-            for key, value in list(state.items()):
-                if key.startswith(name):
-                    local_key = key[len(name) :]
-                    if "." not in local_key:
-                        module._streaming_state[local_key] = value
-                        del state[key]
-
-        self._apply_named_streaming(_set)
-        assert len(state) == 0, list(state.keys())
-
-    def flush(self, x: tp.Optional[torch.Tensor] = None):
-        if x is None:
+    def get_state(self, model_state: ModelState | None) -> State | None:
+        if model_state is None or self._module_absolute_name is None:
             return None
-        else:
-            return self(x)
+        return model_state.get(self._module_absolute_name)
 
 
-class StreamingSequential(StreamingModule, nn.Sequential):
-    """A streaming compatible alternative of `nn.Sequential`."""
+def init_states(model: nn.Module, batch_size: int, sequence_length: int) -> ModelState:
+    """Allocate state for every :class:`StatefulModule` reachable from ``model``.
 
-    def flush(self, x: tp.Optional[torch.Tensor] = None):
-        for module in self:
-            if isinstance(module, StreamingModule):
-                x = module.flush(x)
-            elif x is not None:
-                x = module(x)
-        return x
+    Side effect: each stateful submodule has its ``_module_absolute_name`` set
+    so subsequent ``get_state`` calls can find its slot.
+    """
+    result: ModelState = {}
+    for module_name, module in model.named_modules():
+        if isinstance(module, StatefulModule):
+            module._module_absolute_name = module_name
+            result[module_name] = module.init_state(batch_size, sequence_length)
+    return result
+
+
+def increment_steps(
+    model: nn.Module, model_state: ModelState, increment: int = 1
+) -> None:
+    """Bump the step counter for every stateful submodule of ``model``.
+
+    Uses each module's ``_module_absolute_name`` (set by :func:`init_states`)
+    to look up its slot, so this works on subtrees even when ``init_states``
+    was called on a different root.
+    """
+    for _, module in model.named_modules():
+        if (
+            isinstance(module, StatefulModule)
+            and module._module_absolute_name is not None
+        ):
+            module.increment_step(model_state[module._module_absolute_name], increment)

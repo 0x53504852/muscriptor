@@ -28,9 +28,9 @@ from muscriptor.tokenizer.notes import (
 
 def test_sort_notes_by_onset():
     notes = [
-        Note(False, 0, 2.0, 3.0, 60, 1),
-        Note(False, 0, 0.5, 1.5, 62, 1),
-        Note(False, 0, 1.0, 2.0, 64, 1),
+        Note(False, 0, 2.0, 3.0, 60),
+        Note(False, 0, 0.5, 1.5, 62),
+        Note(False, 0, 1.0, 2.0, 64),
     ]
     sort_notes(notes)
     onsets = [n.onset for n in notes]
@@ -54,19 +54,19 @@ def test_sort_note_events_by_time():
 
 
 def test_validate_notes_fixes_short_duration():
-    note = Note(False, 0, 1.0, 1.001, 60, 1)  # offset - onset < 0.01
+    note = Note(False, 0, 1.0, 1.001, 60)  # offset - onset < 0.01
     result = validate_notes([note], fix=True)
     assert result[0].offset >= result[0].onset + MINIMUM_NOTE_DURATION_SEC
 
 
 def test_validate_notes_fixes_inverted():
-    note = Note(False, 0, 2.0, 1.0, 60, 1)  # onset > offset
+    note = Note(False, 0, 2.0, 1.0, 60)  # onset > offset
     result = validate_notes([note], fix=True)
     assert result[0].offset >= result[0].onset
 
 
 def test_validate_notes_removes_none_onset():
-    note = Note(False, 0, None, 1.0, 60, 1)  # type: ignore[arg-type]
+    note = Note(False, 0, None, 1.0, 60)  # type: ignore[arg-type]
     result = validate_notes([note], fix=True)
     assert len(result) == 0
 
@@ -78,8 +78,8 @@ def test_validate_notes_removes_none_onset():
 
 def test_trim_overlapping_notes_no_overlap():
     notes = [
-        Note(False, 0, 0.0, 1.0, 60, 1),
-        Note(False, 0, 1.5, 2.5, 60, 1),
+        Note(False, 0, 0.0, 1.0, 60),
+        Note(False, 0, 1.5, 2.5, 60),
     ]
     result = trim_overlapping_notes(notes)
     assert result[0].offset <= result[1].onset
@@ -87,8 +87,8 @@ def test_trim_overlapping_notes_no_overlap():
 
 def test_trim_overlapping_notes_overlap():
     notes = [
-        Note(False, 0, 0.0, 2.0, 60, 1),
-        Note(False, 0, 1.0, 3.0, 60, 1),
+        Note(False, 0, 0.0, 2.0, 60),
+        Note(False, 0, 1.0, 3.0, 60),
     ]
     result = trim_overlapping_notes(notes)
     assert result[0].offset == result[1].onset
@@ -96,8 +96,8 @@ def test_trim_overlapping_notes_overlap():
 
 def test_trim_overlapping_notes_different_pitch():
     notes = [
-        Note(False, 0, 0.0, 2.0, 60, 1),
-        Note(False, 0, 0.5, 2.5, 62, 1),  # different pitch, no trimming
+        Note(False, 0, 0.0, 2.0, 60),
+        Note(False, 0, 0.5, 2.5, 62),  # different pitch, no trimming
     ]
     result = trim_overlapping_notes(notes)
     assert len(result) == 2
@@ -291,7 +291,7 @@ def test_note_event2note_basic():
 
 
 def test_note2note_event_roundtrip():
-    original = [Note(False, 0, 0.10, 0.50, 60, 1)]
+    original = [Note(False, 0, 0.10, 0.50, 60)]
     note_events = note2note_event(original)
     assert len(note_events) == 2  # onset + offset
     by_vel = {ne.velocity: ne for ne in note_events}

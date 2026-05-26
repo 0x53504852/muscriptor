@@ -7,8 +7,6 @@ import os
 import warnings
 from collections import Counter
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple, Union
-import typing as tp
 
 from mido import Message, MidiFile, MidiTrack, second2tick
 
@@ -21,9 +19,8 @@ class Note:
     is_drum: bool
     program: int  # MIDI program number (0-127); 128 for drum
     onset: float  # onset time in seconds
-    offset: float  # offset time in seconds
+    offset: float  # offset time in seconds (== onset for drums)
     pitch: int  # MIDI note number (0-127)
-    velocity: int  # 1 for onset, 0 for offset; drum has no offset
 
 
 @dataclass
@@ -54,30 +51,28 @@ class Event:
     value: int
 
 
-def sort_notes(notes: tp.List[Note]):
+def sort_notes(notes: list[Note]):
     if len(notes) > 0:
-        notes.sort(
-            key=lambda n: (n.onset, n.is_drum, n.program, n.velocity, n.pitch, n.offset)
-        )
+        notes.sort(key=lambda n: (n.onset, n.is_drum, n.program, n.pitch, n.offset))
 
 
-def sort_note_events(note_events: tp.List[NoteEvent]):
+def sort_note_events(note_events: list[NoteEvent]):
     if len(note_events) > 0:
         note_events.sort(
             key=lambda n: (n.time, n.is_drum, n.program, n.velocity, n.pitch)
         )
 
 
-def sort_tie_note_events(tie_note_events: tp.List[TieNoteEvent]):
+def sort_tie_note_events(tie_note_events: list[TieNoteEvent]):
     if len(tie_note_events) > 0:
         tie_note_events.sort(key=lambda n: (n.program, n.pitch))
 
 
 def validate_notes(
-    notes: tp.List[Note],
-    minimum_offset: tp.Optional[float] = MINIMUM_NOTE_DURATION_SEC,
+    notes: list[Note],
+    minimum_offset: float | None = MINIMUM_NOTE_DURATION_SEC,
     fix: bool = True,
-) -> tp.List[Note]:
+) -> list[Note]:
     if len(notes) > 0:
         for note in list(notes):
             if note.onset is None and fix:
@@ -92,7 +87,7 @@ def validate_notes(
     return notes
 
 
-def trim_overlapping_notes(notes: tp.List[Note], sort: bool = True) -> tp.List[Note]:
+def trim_overlapping_notes(notes: list[Note], sort: bool = True) -> list[Note]:
     if len(notes) <= 1:
         return notes
     trimmed_notes = []
@@ -127,10 +122,10 @@ class EventTokenizer:
 
     def __init__(
         self,
-        special_tokens: List[str],
+        special_tokens: list[str],
         max_shift_steps: int,
-        program_vocabulary: Optional[Dict] = None,
-        drum_vocabulary: Optional[Dict] = None,
+        program_vocabulary: dict | None = None,
+        drum_vocabulary: dict | None = None,
     ):
         self.special_tokens = special_tokens
         _special_token_ranges = [EventRange(token, 0, 0) for token in special_tokens]
@@ -193,11 +188,11 @@ class EventTokenizer:
 
 
 def note_event2event(
-    note_events: List[NoteEvent],
-    tie_note_events: Optional[List[TieNoteEvent]] = None,
+    note_events: list[NoteEvent],
+    tie_note_events: list[TieNoteEvent] | None = None,
     start_time: float = 0.0,
     frame_rate: int = 100,
-) -> List[Event]:
+) -> list[Event]:
     if tie_note_events is not None:
         sort_tie_note_events(tie_note_events)
     note_events.sort(
@@ -259,8 +254,8 @@ def note_event2event(
 
 
 def event2note_event(
-    events: List[Event], start_time: float = 0.0, frame_rate: int = 100
-) -> Tuple[List[NoteEvent], List[TieNoteEvent], List[Tuple[int, ...]], Counter]:
+    events: list[Event], start_time: float = 0.0, frame_rate: int = 100
+) -> tuple[list[NoteEvent], list[TieNoteEvent], list[tuple[int, ...]], Counter]:
     assert start_time >= 0.0
 
     tie_index = None
@@ -370,13 +365,13 @@ class NoteEventTokenizer:
         self,
         max_length: int = 1024,
         frame_rate: int = 100,
-        extra_tokens: List[str] = [],
+        extra_tokens: list[str] = [],
         max_shift_steps: int = 206,
-        program_vocabulary: Optional[Dict] = None,
-        drum_vocabulary: Optional[Dict] = None,
+        program_vocabulary: dict | None = None,
+        drum_vocabulary: dict | None = None,
         modulo_max_shift_steps: bool = False,
     ) -> None:
-        special_tokens: List[str] = ["PAD", "EOS", "UNK"]
+        special_tokens: list[str] = ["PAD", "EOS", "UNK"]
         self.event_tokenizer = EventTokenizer(
             special_tokens=special_tokens + extra_tokens,
             max_shift_steps=max_shift_steps,
@@ -396,10 +391,10 @@ class NoteEventTokenizer:
 
     def encode(
         self,
-        note_events: List[NoteEvent],
-        tie_note_events: Optional[List[TieNoteEvent]] = None,
+        note_events: list[NoteEvent],
+        tie_note_events: list[TieNoteEvent] | None = None,
         start_time: float = 0.0,
-    ) -> List[int]:
+    ) -> list[int]:
         events = note_event2event(
             note_events=note_events,
             tie_note_events=tie_note_events,
@@ -413,13 +408,13 @@ class NoteEventTokenizer:
         return [self.event_tokenizer.encode_event(e) for e in events]
 
     def decode(
-        self, tokens: List[int], start_time: float = 0.0
-    ) -> Tuple[List[NoteEvent], List[TieNoteEvent], List[Tuple[int, ...]], Counter]:
+        self, tokens: list[int], start_time: float = 0.0
+    ) -> tuple[list[NoteEvent], list[TieNoteEvent], list[tuple[int, ...]], Counter]:
         events = [self.event_tokenizer.decode_event_index(idx) for idx in tokens]
         return event2note_event(events, start_time, self.frame_rate)
 
     def decode_segments(
-        self, list_tokens: List[List[int]], list_start_times: List[float]
+        self, list_tokens: list[list[int]], list_start_times: list[float]
     ):
         assert len(list_tokens) == len(list_start_times)
         zipped = []
@@ -434,8 +429,8 @@ class NoteEventTokenizer:
 
 
 def slice_note_events_and_ties(
-    note_events: List[NoteEvent], start_time: float, end_time: float
-) -> Tuple[List[NoteEvent], List[TieNoteEvent]]:
+    note_events: list[NoteEvent], start_time: float, end_time: float
+) -> tuple[list[NoteEvent], list[TieNoteEvent]]:
     if start_time > end_time:
         raise ValueError(
             f"slice_note_events: start_time {start_time} > end_time {end_time}"
@@ -472,16 +467,16 @@ def slice_note_events_and_ties(
 
 
 def note_event2note(
-    note_events: List[NoteEvent],
-    tie_note_events: Optional[List[TieNoteEvent]] = None,
+    note_events: list[NoteEvent],
+    tie_note_events: list[TieNoteEvent] | None = None,
     shorten_notes_above_n_sec: int = 10,
     fix_broken_notes: bool = True,
     trim_overlap: bool = True,
-    force_offset_past_segment_end: Optional[float] = None,
-    force_onset_before_segment_start: Optional[float] = None,
-) -> Tuple[List[Note], Counter]:
-    notes: List[Note] = []
-    active_note_events: Dict[Tuple[int, int], Union[NoteEvent, TieNoteEvent]] = {}
+    force_offset_past_segment_end: float | None = None,
+    force_onset_before_segment_start: float | None = None,
+) -> tuple[list[Note], Counter]:
+    notes: list[Note] = []
+    active_note_events: dict[tuple[int, int], NoteEvent | TieNoteEvent] = {}
     err_cnt: Counter = Counter()
 
     if tie_note_events is not None:
@@ -502,7 +497,6 @@ def note_event2note(
                             onset=ne.time,
                             offset=ne.time + MINIMUM_NOTE_DURATION_SEC,
                             pitch=ne.pitch,
-                            velocity=1,
                         )
                     )
                 else:
@@ -520,7 +514,6 @@ def note_event2note(
                                 onset=active_ne.time,
                                 offset=ne.time,
                                 pitch=active_ne.pitch,
-                                velocity=active_ne.velocity,
                             )
                         )
                     else:  # TieNoteEvent
@@ -531,7 +524,6 @@ def note_event2note(
                                 onset=force_onset_before_segment_start,
                                 offset=ne.time,
                                 pitch=active_ne.pitch,
-                                velocity=1,
                             )
                         )
                 if ne.velocity == 1:
@@ -556,7 +548,6 @@ def note_event2note(
                             if force_offset_past_segment_end is None
                             else force_offset_past_segment_end,
                             pitch=ne.pitch,
-                            velocity=1,
                         )
                     )
         except ValueError as ve:
@@ -579,13 +570,13 @@ def note_event2note(
     return notes, err_cnt
 
 
-def note2note_event(notes: tp.List[Note]) -> tp.List[NoteEvent]:
+def note2note_event(notes: list[Note]) -> list[NoteEvent]:
     note_events = []
     for note in notes:
         if note.program == 1024:
             note.is_drum = True
         note_events.append(
-            NoteEvent(note.is_drum, note.program, note.onset, note.velocity, note.pitch)
+            NoteEvent(note.is_drum, note.program, note.onset, 1, note.pitch)
         )
         if not note.is_drum:
             note_events.append(
@@ -600,7 +591,7 @@ def merge_zipped_note_events_and_ties_to_notes(
     segment_duration,
     force_note_off_missing_tie: bool = True,
     fix_broken_notes: bool = True,
-) -> Tuple[List[Note], Counter]:
+) -> tuple[list[Note], Counter]:
     merged_note_events = []
     prev_last_activity = None
     seg_merge_err_cnt: Counter = Counter()
@@ -650,8 +641,8 @@ def merge_zipped_note_events_and_ties_to_notes(
 
 
 def note_event2midi(
-    note_events: tp.List[NoteEvent],
-    output_file: tp.Optional[tp.Union[str, "os.PathLike"]] = None,
+    note_events: list[NoteEvent],
+    output_file: str | os.PathLike | None = None,
     velocity: int = 100,
     ticks_per_beat: int = 480,
     tempo: int = 500000,
@@ -676,7 +667,7 @@ def note_event2midi(
     note_events = list(note_events) + drum_offset_events
     sort_note_events(note_events)
 
-    program_to_channel: Dict[int, int] = {}
+    program_to_channel: dict[int, int] = {}
     available_channels = list(range(0, 9)) + list(range(10, 16))
     drums_initialized = False
     current_tick = 0

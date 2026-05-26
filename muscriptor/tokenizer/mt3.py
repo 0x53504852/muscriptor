@@ -6,8 +6,6 @@ Adapted from YourMT3+ (https://github.com/mimbres/YourMT3) and audiocraft_trans.
 import logging
 from abc import ABC, abstractmethod
 from collections import Counter
-from typing import List, Dict
-
 import torch
 
 from muscriptor.tokenizer.notes import (
@@ -23,7 +21,7 @@ from muscriptor.tokenizer.notes import (
 logger = logging.getLogger(__name__)
 
 
-def _get_drum_group_note_map(drum_vocabulary: str) -> Dict[int, List[int]]:
+def _get_drum_group_note_map(drum_vocabulary: str) -> dict[int, list[int]]:
     if drum_vocabulary == "FULL":
         return {i: [i] for i in range(128)}
     elif drum_vocabulary == "GM_DRUM_NOTES":
@@ -63,7 +61,7 @@ def get_group_program_map(
     misc_programs: str,
     is_mt3: bool = False,
     include_drums: bool = False,
-) -> Dict[int, List[int]]:
+) -> dict[int, list[int]]:
     if instrument_vocabulary == "ONLY_PIANO":
         ret = {0: list(range(128))}
     elif instrument_vocabulary == "FULL":
@@ -154,7 +152,7 @@ def get_group_program_map(
 
 # Human-readable names for the MT3_FULL_PLUS instrument groups (see
 # get_group_program_map). Used by the CLI's --expected-instruments option.
-MT3_FULL_PLUS_GROUP_NAMES: Dict[str, int] = {
+MT3_FULL_PLUS_GROUP_NAMES: dict[str, int] = {
     "acoustic_piano": 0,
     "electric_piano": 1,
     "chromatic_percussion": 2,

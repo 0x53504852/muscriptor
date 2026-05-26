@@ -11,9 +11,9 @@ from muscriptor.utils.midi import notes_to_midi, save_midi
 
 def _sample_notes():
     return [
-        Note(is_drum=False, program=0, onset=0.0, offset=0.5, pitch=60, velocity=1),
-        Note(is_drum=False, program=0, onset=0.5, offset=1.0, pitch=64, velocity=1),
-        Note(is_drum=True, program=128, onset=0.0, offset=0.01, pitch=36, velocity=1),
+        Note(is_drum=False, program=0, onset=0.0, offset=0.5, pitch=60),
+        Note(is_drum=False, program=0, onset=0.5, offset=1.0, pitch=64),
+        Note(is_drum=True, program=128, onset=0.0, offset=0.01, pitch=36),
     ]
 
 
