@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import sys
 from enum import Enum
 from pathlib import Path
 
@@ -17,6 +18,7 @@ app = typer.Typer(add_completion=False, help="muscriptor — audio-to-MIDI trans
 class OutputFormat(str, Enum):
     midi = "midi"
     json = "json"
+    jsonl = "jsonl"
 
 
 def _event_to_dict(ev: NoteStartEvent | NoteEndEvent) -> dict:
@@ -36,13 +38,20 @@ def transcribe(
         None,
         "--output",
         "-o",
-        help="Output file path (default: <audio_file>.<ext> where ext matches --format)",
+        help=(
+            "Output file path. Use '-' to write to stdout (all progress / "
+            "timing info is sent to stderr in that case). "
+            "Default: <audio_file>.<ext> where ext matches --format."
+        ),
     ),
     format: OutputFormat = typer.Option(
         OutputFormat.midi,
         "--format",
         "-f",
-        help="Output format: midi (default) or json (list of NoteStart/NoteEnd events)",
+        help=(
+            "Output format: midi (default), json (single array of events), "
+            "or jsonl (one event per line, streamed as transcription progresses)"
+        ),
         case_sensitive=False,
     ),
     notes: bool = typer.Option(False, "--notes", help="Print decoded events to stdout"),
@@ -100,20 +109,27 @@ def transcribe(
         typer.echo(f"Error: file not found: {audio_file}", err=True)
         raise typer.Exit(1)
 
+    is_stdout = output is not None and str(output) == "-"
+
     if output is None:
-        output = audio_file.with_suffix(
-            ".mid" if format == OutputFormat.midi else ".json"
-        )
+        suffix = {
+            OutputFormat.midi: ".mid",
+            OutputFormat.json: ".json",
+            OutputFormat.jsonl: ".jsonl",
+        }[format]
+        output = audio_file.with_suffix(suffix)
 
     _device = None if device == "auto" else device
 
-    typer.echo("Loading model…")
+    # All chatty progress/timing info goes to stderr — stdout is reserved for
+    # the actual output when `-o -` is used.
+    typer.echo("Loading model…", err=True)
     model = TranscriptionModel.load_model(
         weights_path=model_path,
         device=_device,
     )
 
-    typer.echo(f"Transcribing {audio_file} …")
+    typer.echo(f"Transcribing {audio_file} …", err=True)
 
     kwargs = dict(
         audio=audio_file,
@@ -127,17 +143,48 @@ def transcribe(
 
     if format == OutputFormat.midi:
         midi_bytes = model.transcribe_to_midi(**kwargs)
-        output.write_bytes(midi_bytes)
-        typer.echo(f"Saved MIDI to {output}")
+        if is_stdout:
+            sys.stdout.buffer.write(midi_bytes)
+            sys.stdout.buffer.flush()
+        else:
+            output.write_bytes(midi_bytes)
+            typer.echo(f"Saved MIDI to {output}", err=True)
         if notes:
-            typer.echo("Re-run with --format json to inspect the event stream.")
+            typer.echo(
+                "Re-run with --format json to inspect the event stream.", err=True
+            )
+    elif format == OutputFormat.jsonl:
+        # Stream one JSON object per line, flushing after each event so the
+        # file (or stdout pipe) can be consumed live.
+        if is_stdout:
+            sink = sys.stdout
+            close_after = False
+        else:
+            sink = output.open("w")
+            close_after = True
+        try:
+            for e in model.transcribe(**kwargs):
+                sink.write(json.dumps(_event_to_dict(e)) + "\n")
+                sink.flush()
+                if notes:
+                    typer.echo(str(e), err=True)
+        finally:
+            if close_after:
+                sink.close()
+        if not is_stdout:
+            typer.echo(f"Saved JSONL to {output}", err=True)
     else:  # json
         events = list(model.transcribe(**kwargs))
-        output.write_text(json.dumps([_event_to_dict(e) for e in events], indent=2))
-        typer.echo(f"Saved JSON to {output}")
+        payload = json.dumps([_event_to_dict(e) for e in events], indent=2)
+        if is_stdout:
+            sys.stdout.write(payload + "\n")
+            sys.stdout.flush()
+        else:
+            output.write_text(payload)
+            typer.echo(f"Saved JSON to {output}", err=True)
         if notes:
             for e in events:
-                typer.echo(str(e))
+                typer.echo(str(e), err=True)
 
 
 @app.command()

@@ -4,6 +4,7 @@ import contextlib
 import io
 import math
 import re
+import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator
@@ -50,7 +51,7 @@ def _timed(label: str, store: list[tuple[str, float]] | None = None):
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     dt = time.perf_counter() - t0
-    print(f"[muscriptor] {label}: {dt:.2f}s")
+    print(f"[muscriptor] {label}: {dt:.2f}s", file=sys.stderr)
     if store is not None:
         store.append((label, dt))
 
@@ -257,7 +258,8 @@ class TranscriptionModel:
         max_gen_len = 512
         eos_id = self._tokenizer.tokenizer.eos_id
         print(
-            f"[muscriptor] audio: {total_duration:.1f}s → {num_chunks} chunk(s) of {_SEGMENT_DURATION}s"
+            f"[muscriptor] audio: {total_duration:.1f}s → {num_chunks} chunk(s) of {_SEGMENT_DURATION}s",
+            file=sys.stderr,
         )
 
         with _timed("build conditions", timings):
@@ -335,10 +337,14 @@ class TranscriptionModel:
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        print(f"[muscriptor] generate total: {time.perf_counter() - t_gen:.2f}s")
+        print(
+            f"[muscriptor] generate total: {time.perf_counter() - t_gen:.2f}s",
+            file=sys.stderr,
+        )
         print(
             f"[muscriptor] transcribe total: {time.perf_counter() - t_total:.2f}s "
-            f"({total_duration:.1f}s audio)"
+            f"({total_duration:.1f}s audio)",
+            file=sys.stderr,
         )
 
     # ------------------------------------------------------------------
