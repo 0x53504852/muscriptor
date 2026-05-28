@@ -10,7 +10,7 @@ import io
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Protocol
+from typing import Annotated, Protocol
 
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -49,8 +49,8 @@ def create_app(model: _TranscriberLike, web_dir: str | Path | None = None) -> Fa
 
     @app.post("/transcribe")
     async def transcribe(
-        file: UploadFile = File(...),
-        instruments: list[str] = Form(default_factory=list),
+        file: Annotated[UploadFile, File()],
+        instruments: Annotated[list[str], Form(default_factory=list)],
     ):
         data = await file.read()
         try:

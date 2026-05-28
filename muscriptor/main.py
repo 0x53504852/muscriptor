@@ -5,6 +5,7 @@ import json
 import sys
 from enum import Enum
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -33,63 +34,87 @@ def _event_to_dict(ev: NoteStartEvent | NoteEndEvent) -> dict:
 
 @app.command()
 def transcribe(
-    audio_file: Path = typer.Argument(..., help="Input audio file (wav, mp3, flac, …)"),
-    output: Path | None = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help=(
-            "Output file path. Use '-' to write to stdout (all progress / "
-            "timing info is sent to stderr in that case). "
-            "Default: <audio_file>.<ext> where ext matches --format."
+    audio_file: Annotated[
+        Path, typer.Argument(help="Input audio file (wav, mp3, flac, …)")
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help=(
+                "Output file path. Use '-' to write to stdout (all progress / "
+                "timing info is sent to stderr in that case). "
+                "Default: <audio_file>.<ext> where ext matches --format."
+            ),
         ),
-    ),
-    format: OutputFormat = typer.Option(
-        OutputFormat.midi,
-        "--format",
-        "-f",
-        help=(
-            "Output format: midi (default), json (single array of events), "
-            "or jsonl (one event per line, streamed as transcription progresses)"
+    ] = None,
+    format: Annotated[
+        OutputFormat,
+        typer.Option(
+            "--format",
+            "-f",
+            help=(
+                "Output format: midi (default), json (single array of events), "
+                "or jsonl (one event per line, streamed as transcription progresses)"
+            ),
+            case_sensitive=False,
         ),
-        case_sensitive=False,
-    ),
-    notes: bool = typer.Option(False, "--notes", help="Print decoded events to stdout"),
-    sampling: bool = typer.Option(
-        False, "--sampling", help="Use temperature sampling instead of greedy decoding"
-    ),
-    temperature: float = typer.Option(
-        1.0, "--temperature", "-t", help="Sampling temperature (only with --sampling)"
-    ),
-    cfg_coef: float = typer.Option(
-        2.0, "--cfg-coef", help="Classifier-free guidance coefficient"
-    ),
-    model_path: Path | None = typer.Option(
-        None, "--model", "-m", help="Path to safetensors weights file"
-    ),
-    device: str = typer.Option(
-        "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
-    ),
-    batch_size: int | None = typer.Option(
-        None,
-        "--batch-size",
-        "-b",
-        help="Batch size for generation (default: 1 on CPU, 4 on GPU)",
-    ),
-    no_eos_is_ok: bool = typer.Option(
-        False,
-        "--no-eos-is-ok",
-        help="If set, a chunk failing to emit EOS within max_gen_len produces a warning instead of an error",
-    ),
-    instruments: str | None = typer.Option(
-        None,
-        "--instruments",
-        help=(
-            "Comma-separated list of expected instrument group names "
-            "(e.g. 'acoustic_piano,acoustic_guitar,acoustic_bass'). "
-            "Run 'muscriptor list-instruments' to see all available names."
+    ] = OutputFormat.midi,
+    notes: Annotated[
+        bool, typer.Option("--notes", help="Print decoded events to stdout")
+    ] = False,
+    sampling: Annotated[
+        bool,
+        typer.Option(
+            "--sampling", help="Use temperature sampling instead of greedy decoding"
         ),
-    ),
+    ] = False,
+    temperature: Annotated[
+        float,
+        typer.Option(
+            "--temperature", "-t", help="Sampling temperature (only with --sampling)"
+        ),
+    ] = 1.0,
+    cfg_coef: Annotated[
+        float, typer.Option("--cfg-coef", help="Classifier-free guidance coefficient")
+    ] = 2.0,
+    model_path: Annotated[
+        Path | None,
+        typer.Option("--model", "-m", help="Path to safetensors weights file"),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(
+            "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
+        ),
+    ] = "auto",
+    batch_size: Annotated[
+        int | None,
+        typer.Option(
+            "--batch-size",
+            "-b",
+            help="Batch size for generation (default: 1 on CPU, 4 on GPU)",
+        ),
+    ] = None,
+    no_eos_is_ok: Annotated[
+        bool,
+        typer.Option(
+            "--no-eos-is-ok",
+            help="If set, a chunk failing to emit EOS within max_gen_len produces a warning instead of an error",
+        ),
+    ] = False,
+    instruments: Annotated[
+        str | None,
+        typer.Option(
+            "--instruments",
+            help=(
+                "Comma-separated list of expected instrument group names "
+                "(e.g. 'acoustic_piano,acoustic_guitar,acoustic_bass'). "
+                "Run 'muscriptor list-instruments' to see all available names."
+            ),
+        ),
+    ] = None,
 ):
     """Transcribe an audio file to MIDI."""
     instrument_group: str | None = None
@@ -189,14 +214,18 @@ def transcribe(
 
 @app.command()
 def serve(
-    host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
-    port: int = typer.Option(8000, "--port", help="Port to listen on"),
-    model_path: Path | None = typer.Option(
-        None, "--model", "-m", help="Path to safetensors weights file"
-    ),
-    device: str = typer.Option(
-        "auto", "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
-    ),
+    host: Annotated[str, typer.Option("--host", help="Bind address")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port to listen on")] = 8000,
+    model_path: Annotated[
+        Path | None,
+        typer.Option("--model", "-m", help="Path to safetensors weights file"),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(
+            "--device", "-d", help="Device: 'auto', 'cpu', 'cuda', 'cuda:0', …"
+        ),
+    ] = "auto",
 ):
     """Run the HTTP transcription server (POST /transcribe → SSE event stream)."""
     import uvicorn
