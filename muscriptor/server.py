@@ -13,17 +13,20 @@ from pathlib import Path
 from typing import Protocol
 
 import torch
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from muscriptor.events import NoteEndEvent, NoteStartEvent
+from muscriptor.tokenizer.mt3 import MT3_FULL_PLUS_GROUP_NAMES
 from muscriptor.utils.audio import _read_wav_file
 
 
 class _TranscriberLike(Protocol):
     def transcribe(
-        self, audio: str | Path | tuple[torch.Tensor, int]
+        self,
+        audio: str | Path | tuple[torch.Tensor, int],
+        instrument_group: str | None = None,
     ) -> Iterator[NoteStartEvent | NoteEndEvent]: ...
 
 
@@ -40,16 +43,35 @@ def event_to_dict(ev: NoteStartEvent | NoteEndEvent) -> dict:
 def create_app(model: _TranscriberLike, web_dir: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="muscriptor")
 
+    @app.get("/instruments")
+    async def list_instruments():
+        return {"instruments": list(MT3_FULL_PLUS_GROUP_NAMES.keys())}
+
     @app.post("/transcribe")
-    async def transcribe(file: UploadFile = File(...)):
+    async def transcribe(
+        file: UploadFile = File(...),
+        instruments: list[str] = Form(default_factory=list),
+    ):
         data = await file.read()
         try:
             wav, sr = _read_wav_file(io.BytesIO(data))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid WAV: {e}")
 
+        unknown = [n for n in instruments if n not in MT3_FULL_PLUS_GROUP_NAMES]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown instrument name(s): {', '.join(unknown)}",
+            )
+        instrument_group: str | None = (
+            " ".join(str(MT3_FULL_PLUS_GROUP_NAMES[n]) for n in instruments)
+            if instruments
+            else None
+        )
+
         def gen():
-            for ev in model.transcribe((wav, sr)):
+            for ev in model.transcribe((wav, sr), instrument_group=instrument_group):
                 payload = json.dumps(event_to_dict(ev))
                 yield f"data: {payload}\n\n"
 

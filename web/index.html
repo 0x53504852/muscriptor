@@ -13,6 +13,16 @@
     </header>
 
     <main>
+      <section id="conditioning">
+        <div id="conditioning-header">
+          <h2>Conditioning instruments <span class="hint">(optional — leave empty for auto-detect)</span></h2>
+          <div id="conditioning-actions">
+            <button type="button" id="cond-none">Clear</button>
+          </div>
+        </div>
+        <div id="conditioning-list"></div>
+      </section>
+
       <div id="dropzone">
         <p>Drag &amp; drop a .wav file here</p>
         <input id="file-input" type="file" accept="audio/wav,.wav" hidden />

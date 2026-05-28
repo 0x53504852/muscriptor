@@ -28,6 +28,41 @@ const mixSlider = document.getElementById("mix")! as HTMLInputElement;
 const clock = document.getElementById("clock")!;
 const canvas = document.getElementById("piano-roll")! as HTMLCanvasElement;
 const instrumentList = document.getElementById("instrument-list")!;
+const condList = document.getElementById("conditioning-list")!;
+const condClear = document.getElementById("cond-none") as HTMLButtonElement;
+
+async function loadConditioningInstruments() {
+  try {
+    const resp = await fetch("/instruments");
+    if (!resp.ok) return;
+    const data = (await resp.json()) as { instruments: string[] };
+    for (const name of data.instruments) {
+      const label = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = name;
+      cb.name = "cond-instrument";
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(name.replace(/_/g, " ")));
+      condList.appendChild(label);
+    }
+  } catch {
+    /* ignore — server may not expose endpoint */
+  }
+}
+loadConditioningInstruments();
+
+condClear.addEventListener("click", () => {
+  condList
+    .querySelectorAll<HTMLInputElement>("input[type=checkbox]")
+    .forEach((c) => (c.checked = false));
+});
+
+function selectedConditioningInstruments(): string[] {
+  return Array.from(
+    condList.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked"),
+  ).map((c) => c.value);
+}
 
 const roll = new PianoRoll(canvas);
 const audio = new AudioEngine();
@@ -100,7 +135,9 @@ async function transcribe(file: File) {
   let started = false;
   let maxEnd = 0;
   try {
-    for await (const raw of streamTranscribe("/transcribe", file)) {
+    const cond = selectedConditioningInstruments();
+    const extra = cond.length > 0 ? { instruments: cond } : undefined;
+    for await (const raw of streamTranscribe("/transcribe", file, extra)) {
       const ev = raw as StreamedEvent;
       onEvent(ev);
       if (ev.type === "end" && ev.end_time > maxEnd) maxEnd = ev.end_time;

@@ -2,10 +2,20 @@
 export async function* streamTranscribe(
   url: string,
   file: File,
+  extra?: Record<string, string | string[]>,
   signal?: AbortSignal,
 ): AsyncGenerator<unknown> {
   const form = new FormData();
   form.append("file", file, file.name);
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (Array.isArray(v)) {
+        for (const item of v) form.append(k, item);
+      } else {
+        form.append(k, v);
+      }
+    }
+  }
   const resp = await fetch(url, { method: "POST", body: form, signal });
   if (!resp.ok || !resp.body) {
     throw new Error(`server returned ${resp.status}`);

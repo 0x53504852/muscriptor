@@ -20,7 +20,7 @@ class FakeModel:
         self._events = events
         self.calls: list[str] = []
 
-    def transcribe(self, audio):
+    def transcribe(self, audio, instrument_group=None):
         self.calls.append(str(audio))
         yield from self._events
 
@@ -114,8 +114,9 @@ def test_transcribe_passes_tensor_not_path(tmp_path):
     captured: dict = {}
 
     class Capturing(FakeModel):
-        def transcribe(self, audio):
+        def transcribe(self, audio, instrument_group=None):
             captured["audio"] = audio
+            captured["instrument_group"] = instrument_group
             yield from self._events
 
     model = Capturing([])

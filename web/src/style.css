@@ -87,6 +87,65 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 #instruments h2 { margin: 0 0 8px 0; font-size: 14px; }
 
+#conditioning {
+  grid-column: 1 / -1;
+  background: #101015;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+#conditioning-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+#conditioning h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+#conditioning .hint {
+  font-weight: 400;
+  font-size: 12px;
+  color: #888;
+  margin-left: 6px;
+}
+
+#conditioning-actions {
+  margin-left: auto;
+}
+
+#conditioning-actions button {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+#conditioning-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+#conditioning-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 2px 0;
+  user-select: none;
+}
+
+#conditioning-list label:hover { color: #fff; }
+
+#conditioning-list input[type="checkbox"] {
+  accent-color: #6cf;
+  margin: 0;
+}
+
 #instrument-list {
   list-style: none;
   padding: 0;
