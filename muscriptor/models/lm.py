@@ -54,33 +54,6 @@ class ScaledEmbedding(nn.Embedding):
 # ---------------------------------------------------------------------------
 
 
-def _delay_sequence(
-    delays: list[int], tensor: torch.Tensor, padding: torch.Tensor
-) -> torch.Tensor:
-    """padding: [B, K, 1]"""
-    B, K, T = tensor.shape
-    max_delay = max(delays)
-    assert len(delays) == K
-    if max_delay == 0:
-        return tensor
-    outs = []
-    for k, delay in enumerate(delays):
-        delay_right = max_delay - delay
-        if delay_right > 0:
-            line = torch.cat(
-                [
-                    padding[:, k].expand(-1, delay),
-                    tensor[:, k],
-                    padding[:, k].expand(-1, delay_right),
-                ],
-                dim=1,
-            )
-        else:
-            line = torch.cat([padding[:, k].expand(-1, delay), tensor[:, k]], dim=1)
-        outs.append(line)
-    return torch.stack(outs, dim=1)
-
-
 def _undelay_sequence(
     delays: list[int],
     tensor: torch.Tensor,
