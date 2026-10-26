@@ -47,11 +47,16 @@ class StreamingMultiheadAttention(StatefulModule):
     def init_state(self, batch_size: int, sequence_length: int) -> State:
         weight = self.in_proj_weight
         return {
-            "cache": torch.full(
-                (2, batch_size, sequence_length, self.num_heads, self.dim_per_head),
-                float("nan"),
-                device=weight.device,
-                dtype=weight.dtype,
+            # Allocated on the first forward, in the dtype of k / v: under
+            # fp16 autocast that halves the cache size (vs. the fp32 weights)
+            # and avoids re-casting the whole cache at every decoding step.
+            "cache": None,
+            "cache_shape": (
+                2,
+                batch_size,
+                sequence_length,
+                self.num_heads,
+                self.dim_per_head,
             ),
             "offset": torch.zeros(1, dtype=torch.long, device=weight.device),
         }
@@ -63,6 +68,10 @@ class StreamingMultiheadAttention(StatefulModule):
         if state is None:
             return k, v
         cache = state["cache"]
+        if cache is None:
+            cache = state["cache"] = torch.full(
+                state["cache_shape"], float("nan"), device=k.device, dtype=k.dtype
+            )
         end = int(state["offset"].item())
         T = k.shape[1]
         cache[0, :, end : end + T] = k
