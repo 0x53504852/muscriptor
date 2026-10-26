@@ -162,6 +162,50 @@ def test_transcribe_note_fields_in_range(transcription_model, noise):
 
 
 # ---------------------------------------------------------------------------
+# transcribe_batch
+# ---------------------------------------------------------------------------
+
+
+def _starts(events):
+    return [
+        (e.pitch, e.start_time, e.instrument, e.index)
+        for e in events
+        if isinstance(e, NoteStartEvent)
+    ]
+
+
+def test_transcribe_batch_matches_transcribe(transcription_model, noise, silence):
+    """Chunks of several inputs share batches; results are the same as one by one,
+    including an input whose chunks are split across two batches and an empty input."""
+    longer = torch.cat([noise, noise * 2, noise * 0.5], dim=-1)[:, : _SAMPLE_RATE * 12]
+    audios = [
+        (longer, _SAMPLE_RATE),
+        (torch.zeros(1, 0), _SAMPLE_RATE),
+        (noise, _SAMPLE_RATE),
+        (silence, _SAMPLE_RATE),
+    ]
+    results = list(transcription_model.transcribe_batch(audios, batch_size=2))
+    assert [i for i, _ in results] == [0, 1, 2, 3]
+    assert results[1][1] == []
+    for (i, events), audio in zip(results, audios):
+        _assert_start_end_invariants(events)
+        single = list(transcription_model.transcribe(audio, batch_size=2))
+        assert _starts(events) == _starts(single)
+
+
+def test_transcribe_batch_accepts_a_generator(transcription_model, silence):
+    audios = ((silence, _SAMPLE_RATE) for _ in range(3))
+    assert [i for i, _ in transcription_model.transcribe_batch(audios)] == [0, 1, 2]
+
+
+def test_events_to_midi_matches_transcribe_to_midi(transcription_model, noise):
+    ((_, events),) = transcription_model.transcribe_batch([(noise, _SAMPLE_RATE)])
+    assert transcription_model.events_to_midi(
+        events
+    ) == transcription_model.transcribe_to_midi((noise, _SAMPLE_RATE))
+
+
+# ---------------------------------------------------------------------------
 # transcribe_to_midi
 # ---------------------------------------------------------------------------
 

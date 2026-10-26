@@ -23,6 +23,12 @@ for event in model.transcribe("audio.wav"):
 # Or get a MIDI file directly
 midi_bytes = model.transcribe_to_midi("audio.wav")
 Path("out.mid").write_bytes(midi_bytes)
+
+# Several songs at once: their 5 s chunks are packed into shared batches,
+# so the GPU stays busy across song boundaries
+paths = ["a.wav", "b.wav", "c.wav"]
+for i, events in model.transcribe_batch(paths, batch_size=32):
+    Path(paths[i]).with_suffix(".mid").write_bytes(model.events_to_midi(events))
 ```
 
 ```python
@@ -102,6 +108,24 @@ class TranscriptionModel:
             instrument are recovered.
         """
 
+    def transcribe_batch(
+            self,
+            audios: Iterable[str | Path | tuple[torch.Tensor, int]],
+            ...,  # same options as transcribe
+        ) -> Iterator[tuple[int, list[NoteStartEvent | NoteEndEvent]]]:
+        """Transcribe several inputs, packing the chunks of consecutive
+        inputs into the same batches (with `transcribe`, the last batch of
+        every input is usually only partly full). Inputs are loaded lazily,
+        so `audios` can be a long list or a generator.
+
+        Yields `(index, events)` per input, in input order, as soon as its
+        last chunk is decoded; `events` is what `transcribe` would yield.
+        A chunk without EOS warns / raises with "input <index> chunk <n>".
+        """
+
+    def events_to_midi(self, events) -> bytes:
+        """Serialize an event list (e.g. from `transcribe_batch`) to MIDI bytes."""
+
     def transcribe_to_midi(
             self,
             audio: str | Path | tuple[torch.Tensor, int],
@@ -125,6 +149,8 @@ class TranscriptionModel:
 
 ```bash
 muscriptor transcribe audio.wav -o out.mid
+# several files, batched together; outputs next to each input or in --output-dir
+muscriptor transcribe a.wav b.wav c.wav --batch-size 32 --output-dir midi/
 ```
 
 ## Web UI

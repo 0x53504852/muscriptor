@@ -2,12 +2,13 @@
 
 import contextlib
 import io
+import itertools
 import math
 import re
 import sys
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,19 @@ def _timed(label: str, store: list[tuple[str, float]] | None = None):
 
 
 # Placeholder URL — fill in after HuggingFace upload.
+@dataclass
+class _Chunk:
+    """One 5-second chunk of one input, ready for generation."""
+
+    input_index: int
+    chunk_index: int
+    seek_time: float
+    next_seek_time: float | None  # None for the last chunk of an input
+    condition: ConditioningAttributes | None  # None for an empty input
+
+
+AudioInput = str | Path | tuple[torch.Tensor, int]
+
 _HF_URL = "https://huggingface.co/kyutai/muscriptor/resolve/main/muscriptor_weights.safetensors"
 
 _SAMPLE_RATE = 16000
@@ -220,7 +234,7 @@ class TranscriptionModel:
     # ------------------------------------------------------------------
     def transcribe(
         self,
-        audio: str | Path | tuple[torch.Tensor, int],
+        audio: AudioInput,
         use_sampling: bool = False,
         temperature: float = 1.0,
         cfg_coef: float = 2.0,
@@ -236,83 +250,198 @@ class TranscriptionModel:
         within each chunk events arrive in temporal order, and all events
         from chunk N are yielded before any event from chunk N+1.
         """
-        if batch_size is None:
-            batch_size = 4 if self._device.type == "cuda" else 1
-
-        timings: list[tuple[str, float]] = []
         t_total = time.perf_counter()
-
-        if isinstance(audio, tuple):
-            tensor, sample_rate = audio
-            with _timed("load audio", timings):
-                wav = self._load_wav(tensor, sample_rate)
-        else:
-            with _timed("load audio", timings):
-                wav = self._load_wav(audio, None)
-
-        total_samples = wav.shape[-1]
-        total_duration = total_samples / _SAMPLE_RATE
-
-        segment_samples = int(_SEGMENT_DURATION * _SAMPLE_RATE)
-        num_chunks = math.ceil(total_samples / segment_samples)
-        max_gen_len = 512
-        eos_id = self._tokenizer.tokenizer.eos_id
+        wav = self._load_input(audio)
+        total_duration = wav.shape[-1] / _SAMPLE_RATE
+        num_chunks = self._num_chunks(wav)
         print(
             f"[muscriptor] audio: {total_duration:.1f}s → {num_chunks} chunk(s) of {_SEGMENT_DURATION}s",
             file=sys.stderr,
         )
 
-        with _timed("build conditions", timings):
-            all_conditions: list[ConditioningAttributes] = []
-            seek_times: list[float] = []
+        builder = _StreamingEventBuilder(self._instrument_for_program)
+        chunks = self._iter_chunks([wav], instrument_group, dataset_name)
+        for (
+            _,
+            chunk_index,
+            seek_time,
+            next_seek_time,
+            token_list,
+        ) in self._generate_chunks(
+            chunks,
+            batch_size,
+            no_eos_is_ok,
+            multi_input=False,
+            use_sampling=use_sampling,
+            temperature=temperature,
+            cfg_coef=cfg_coef,
+        ):
+            if token_list is None:  # empty input
+                continue
+            note_events, tie_note_events, _, _ = self._tokenizer.tokenizer.decode(
+                token_list, start_time=seek_time
+            )
+            yield from builder.process_chunk(
+                note_events, tie_note_events, seek_time, next_seek_time
+            )
+
+        yield from builder.flush()
+
+        print(
+            f"[muscriptor] transcribe total: {time.perf_counter() - t_total:.2f}s "
+            f"({total_duration:.1f}s audio)",
+            file=sys.stderr,
+        )
+
+    def transcribe_batch(
+        self,
+        audios: Iterable[AudioInput],
+        use_sampling: bool = False,
+        temperature: float = 1.0,
+        cfg_coef: float = 2.0,
+        instrument_group: str | None = None,
+        dataset_name: str | None = None,
+        batch_size: int | None = None,
+        no_eos_is_ok: bool = False,
+    ) -> Iterator[tuple[int, list[NoteStartEvent | NoteEndEvent]]]:
+        """Transcribe several audio inputs, packing their chunks into shared batches.
+
+        Equivalent to calling :meth:`transcribe` on each input, but the
+        5-second chunks of consecutive inputs are batched together, so the
+        GPU stays busy across input boundaries (with `transcribe`, the last
+        batch of every input is usually only partly full). Inputs are loaded
+        lazily, so `audios` can be a long list or a generator.
+
+        Yields `(index, events)` for every input, in input order, as soon as
+        its last chunk is decoded. `index` is the position in `audios` and
+        `events` is the list :meth:`transcribe` would have yielded.
+        """
+        t_total = time.perf_counter()
+        builders: dict[int, _StreamingEventBuilder] = {}
+        events: dict[int, list[NoteStartEvent | NoteEndEvent]] = {}
+        chunks = self._iter_chunks(
+            (self._load_input(a) for a in audios), instrument_group, dataset_name
+        )
+        for (
+            input_index,
+            chunk_index,
+            seek_time,
+            next_seek_time,
+            token_list,
+        ) in self._generate_chunks(
+            chunks,
+            batch_size,
+            no_eos_is_ok,
+            multi_input=True,
+            use_sampling=use_sampling,
+            temperature=temperature,
+            cfg_coef=cfg_coef,
+        ):
+            if token_list is not None:
+                builder = builders.setdefault(
+                    input_index, _StreamingEventBuilder(self._instrument_for_program)
+                )
+                out = events.setdefault(input_index, [])
+                note_events, tie_note_events, _, _ = self._tokenizer.tokenizer.decode(
+                    token_list, start_time=seek_time
+                )
+                out.extend(
+                    builder.process_chunk(
+                        note_events, tie_note_events, seek_time, next_seek_time
+                    )
+                )
+            if next_seek_time is None:  # last chunk of this input
+                out = events.pop(input_index, [])
+                if input_index in builders:
+                    out.extend(builders.pop(input_index).flush())
+                yield input_index, out
+
+        print(
+            f"[muscriptor] transcribe_batch total: {time.perf_counter() - t_total:.2f}s",
+            file=sys.stderr,
+        )
+
+    def _num_chunks(self, wav: torch.Tensor) -> int:
+        return math.ceil(wav.shape[-1] / int(_SEGMENT_DURATION * _SAMPLE_RATE))
+
+    def _iter_chunks(
+        self,
+        wavs: Iterable[torch.Tensor],
+        instrument_group: str | None,
+        dataset_name: str | None,
+    ) -> Iterator[_Chunk]:
+        """Split each waveform into 5 s chunks with their conditions, lazily."""
+        segment_samples = int(_SEGMENT_DURATION * _SAMPLE_RATE)
+        for input_index, wav in enumerate(wavs):
+            num_chunks = self._num_chunks(wav)
+            if num_chunks == 0:
+                # Empty input: no chunk to generate, but still reported.
+                yield _Chunk(input_index, 0, 0.0, None, None)
             for i in range(num_chunks):
-                start = i * segment_samples
-                chunk = wav[:, start : start + segment_samples]
+                chunk = wav[:, i * segment_samples : (i + 1) * segment_samples]
                 if chunk.shape[-1] < segment_samples:
                     chunk = F.pad(chunk, (0, segment_samples - chunk.shape[-1]))
-                all_conditions.append(
-                    self._build_conditions(chunk, instrument_group, dataset_name)[0]
+                yield _Chunk(
+                    input_index,
+                    i,
+                    i * _SEGMENT_DURATION,
+                    (i + 1) * _SEGMENT_DURATION if i + 1 < num_chunks else None,
+                    self._build_conditions(chunk, instrument_group, dataset_name)[0],
                 )
-                seek_times.append(i * _SEGMENT_DURATION)
 
-        builder = _StreamingEventBuilder(self._instrument_for_program)
-        num_batches = math.ceil(num_chunks / batch_size)
+    def _generate_chunks(
+        self,
+        chunks: Iterator[_Chunk],
+        batch_size: int | None,
+        no_eos_is_ok: bool,
+        multi_input: bool,
+        use_sampling: bool,
+        temperature: float,
+        cfg_coef: float,
+    ) -> Iterator[tuple[int, int, float, float | None, list[int] | None]]:
+        """Run generation over `chunks`, `batch_size` chunks at a time.
+
+        Yields `(input_index, chunk_index, seek_time, next_seek_time, tokens)`
+        in chunk order; `next_seek_time` is None for the last chunk of an
+        input, `tokens` is None for an empty input.
+        """
+        if batch_size is None:
+            batch_size = 4 if self._device.type == "cuda" else 1
+        max_gen_len = 512
+        eos_id = self._tokenizer.tokenizer.eos_id
         t_gen = time.perf_counter()
-
-        for batch_idx, batch_start in enumerate(range(0, num_chunks, batch_size)):
-            batch_conditions = all_conditions[batch_start : batch_start + batch_size]
-            with _timed(
-                f"generate batch {batch_idx + 1}/{num_batches} ({len(batch_conditions)} chunks)",
-                timings,
-            ):
-                with torch.no_grad():
-                    tokens = self._model.generate(
-                        conditions=batch_conditions,
-                        max_gen_len=max_gen_len,
-                        use_sampling=use_sampling,
-                        temp=temperature,
-                        top_k=0,
-                        top_p=0.0,
-                        cfg_coef=cfg_coef,
-                        early_stop_on_token=eos_id,
-                    )  # [batch, n_q, T_gen]
-
-            for j in range(tokens.shape[0]):
-                chunk_index = batch_start + j
-                seek_time = seek_times[chunk_index]
-                next_seek_time = (
-                    seek_times[chunk_index + 1]
-                    if chunk_index + 1 < num_chunks
-                    else None
-                )
-
+        batch_idx = 0
+        while batch := list(itertools.islice(chunks, batch_size)):
+            todo = [c for c in batch if c.condition is not None]
+            tokens = None
+            if todo:
+                batch_idx += 1
+                with _timed(f"generate batch {batch_idx} ({len(todo)} chunks)"):
+                    with torch.no_grad():
+                        tokens = self._model.generate(
+                            conditions=[c.condition for c in todo],
+                            max_gen_len=max_gen_len,
+                            use_sampling=use_sampling,
+                            temp=temperature,
+                            top_k=0,
+                            top_p=0.0,
+                            cfg_coef=cfg_coef,
+                            early_stop_on_token=eos_id,
+                        )  # [batch, n_q, T_gen]
+            j = 0
+            for c in batch:
+                if c.condition is None:
+                    yield c.input_index, c.chunk_index, c.seek_time, None, None
+                    continue
                 seq = tokens[j]  # [n_q, T_gen]
+                j += 1
                 eos_mask = seq[0] == eos_id
                 if eos_mask.any():
                     seq = seq[:, : eos_mask.int().argmax().item() + 1]
                 else:
+                    where = f"input {c.input_index} " if multi_input else ""
                     msg = (
-                        f"chunk {chunk_index} (seek={seek_time:.1f}s) "
+                        f"{where}chunk {c.chunk_index} (seek={c.seek_time:.1f}s) "
                         f"did not emit EOS within {max_gen_len} tokens"
                     )
                     if no_eos_is_ok:
@@ -322,18 +451,14 @@ class TranscriptionModel:
                             msg
                             + " (pass no_eos_is_ok=True / --no-eos-is-ok to downgrade to a warning)"
                         )
-
-                token_list = seq[0].tolist()
-                token_list = self._tokenizer._drop_instrument_section(token_list)
-                note_events, tie_note_events, _, _ = self._tokenizer.tokenizer.decode(
-                    token_list, start_time=seek_time
+                token_list = self._tokenizer._drop_instrument_section(seq[0].tolist())
+                yield (
+                    c.input_index,
+                    c.chunk_index,
+                    c.seek_time,
+                    c.next_seek_time,
+                    token_list,
                 )
-
-                yield from builder.process_chunk(
-                    note_events, tie_note_events, seek_time, next_seek_time
-                )
-
-        yield from builder.flush()
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -341,16 +466,11 @@ class TranscriptionModel:
             f"[muscriptor] generate total: {time.perf_counter() - t_gen:.2f}s",
             file=sys.stderr,
         )
-        print(
-            f"[muscriptor] transcribe total: {time.perf_counter() - t_total:.2f}s "
-            f"({total_duration:.1f}s audio)",
-            file=sys.stderr,
-        )
 
     # ------------------------------------------------------------------
     def transcribe_to_midi(
         self,
-        audio: str | Path | tuple[torch.Tensor, int],
+        audio: AudioInput,
         use_sampling: bool = False,
         temperature: float = 1.0,
         cfg_coef: float = 2.0,
@@ -364,8 +484,6 @@ class TranscriptionModel:
         Thin wrapper that consumes the event generator, reassembles Notes,
         and serializes them.
         """
-        notes: list[Note] = []
-        open_notes: dict[int, Note] = {}
         events = self.transcribe(
             audio,
             use_sampling=use_sampling,
@@ -376,6 +494,13 @@ class TranscriptionModel:
             batch_size=batch_size,
             no_eos_is_ok=no_eos_is_ok,
         )
+        return self.events_to_midi(events)
+
+    def events_to_midi(self, events: Iterable[NoteStartEvent | NoteEndEvent]) -> bytes:
+        """Serialize a transcribed event stream (e.g. one input of
+        :meth:`transcribe_batch`) to MIDI file bytes."""
+        notes: list[Note] = []
+        open_notes: dict[int, Note] = {}
         for ev in events:
             if isinstance(ev, NoteStartEvent):
                 is_drum = ev.instrument == "drums"
@@ -405,6 +530,13 @@ class TranscriptionModel:
         buf = io.BytesIO()
         midi.save(file=buf)
         return buf.getvalue()
+
+    def _load_input(self, audio: AudioInput) -> torch.Tensor:
+        """`_load_wav` for any accepted audio input (path or `(tensor, sr)`)."""
+        if isinstance(audio, tuple):
+            tensor, sample_rate = audio
+            return self._load_wav(tensor, sample_rate)
+        return self._load_wav(audio, None)
 
     def _program_for_instrument(self, instrument: str) -> int:
         """Inverse of `_instrument_for_program` for non-drum instruments."""

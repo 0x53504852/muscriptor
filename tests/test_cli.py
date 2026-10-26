@@ -28,6 +28,13 @@ class _FakeModel:
         yield s1
         yield NoteEndEvent(end_time=0.9, start_event=s1)
 
+    def transcribe_batch(self, audios, **_):
+        for i, _audio in enumerate(audios):
+            yield i, list(self.transcribe())
+
+    def events_to_midi(self, events):
+        return b"MThd" + bytes([len(list(events))])
+
 
 @pytest.fixture
 def fake_audio(tmp_path: Path) -> Path:
@@ -130,3 +137,66 @@ def test_jsonl_to_file_keeps_progress_on_stderr(patched_model, fake_audio, tmp_p
             {"type": "end", "end_time": 0.9, "start_event_index": 1},
         ]
     ]
+
+
+@pytest.fixture
+def fake_audios(tmp_path: Path, fake_audio: Path) -> list[Path]:
+    (tmp_path / "other").mkdir()
+    second = tmp_path / "other" / "second.wav"
+    second.write_bytes(fake_audio.read_bytes())
+    return [fake_audio, second]
+
+
+def test_several_inputs_write_next_to_each_input(patched_model, fake_audios):
+    runner = CliRunner()
+    result = runner.invoke(main_mod.app, ["transcribe", *map(str, fake_audios)])
+    assert result.exit_code == 0, result.stderr
+    for audio in fake_audios:
+        assert audio.with_suffix(".mid").read_bytes() == b"MThd\x04"
+    assert "Transcribing 2 files" in result.stderr
+
+
+def test_several_inputs_to_output_dir(patched_model, fake_audios, tmp_path):
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(
+        main_mod.app,
+        [
+            "transcribe",
+            *map(str, fake_audios),
+            "-f",
+            "jsonl",
+            "--output-dir",
+            str(out_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.stderr
+    assert sorted(p.name for p in out_dir.iterdir()) == ["second.jsonl", "silent.jsonl"]
+    lines = (out_dir / "second.jsonl").read_text().splitlines()
+    assert [json.loads(ln)["type"] for ln in lines] == ["start", "end", "start", "end"]
+
+
+def test_several_inputs_reject_single_output(patched_model, fake_audios, tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(
+        main_mod.app,
+        ["transcribe", *map(str, fake_audios), "-o", str(tmp_path / "x.mid")],
+    )
+    assert result.exit_code == 1
+    assert "--output-dir" in result.stderr
+
+
+def test_several_inputs_reject_output_name_clash(patched_model, fake_audio, tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(
+        main_mod.app,
+        [
+            "transcribe",
+            str(fake_audio),
+            str(fake_audio),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "would write to" in result.stderr

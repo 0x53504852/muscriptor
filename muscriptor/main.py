@@ -34,8 +34,14 @@ def _event_to_dict(ev: NoteStartEvent | NoteEndEvent) -> dict:
 
 @app.command()
 def transcribe(
-    audio_file: Annotated[
-        Path, typer.Argument(help="Input audio file (wav, mp3, flac, …)")
+    audio_files: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Input audio file(s) (wav, mp3, flac, …). Several files are "
+                "transcribed together, packing their chunks into shared batches."
+            )
+        ),
     ],
     output: Annotated[
         Path | None,
@@ -45,7 +51,18 @@ def transcribe(
             help=(
                 "Output file path. Use '-' to write to stdout (all progress / "
                 "timing info is sent to stderr in that case). "
-                "Default: <audio_file>.<ext> where ext matches --format."
+                "Default: <audio_file>.<ext> where ext matches --format. "
+                "Only valid with a single input; use --output-dir for several."
+            ),
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            help=(
+                "Directory for the outputs, named <audio_file stem>.<ext>. "
+                "Default: next to each input."
             ),
         ),
     ] = None,
@@ -116,7 +133,7 @@ def transcribe(
         ),
     ] = None,
 ):
-    """Transcribe an audio file to MIDI."""
+    """Transcribe audio file(s) to MIDI."""
     instrument_group: str | None = None
     if instruments is not None:
         names = [n.strip() for n in instruments.split(",") if n.strip()]
@@ -130,19 +147,39 @@ def transcribe(
             raise typer.Exit(1)
         instrument_group = " ".join(str(MT3_FULL_PLUS_GROUP_NAMES[n]) for n in names)
 
-    if not audio_file.exists():
-        typer.echo(f"Error: file not found: {audio_file}", err=True)
+    missing = [f for f in audio_files if not f.exists()]
+    if missing:
+        typer.echo(f"Error: file not found: {', '.join(map(str, missing))}", err=True)
+        raise typer.Exit(1)
+
+    if output is not None and len(audio_files) > 1:
+        typer.echo(
+            "Error: --output/-o takes a single input; use --output-dir with several.",
+            err=True,
+        )
         raise typer.Exit(1)
 
     is_stdout = output is not None and str(output) == "-"
 
-    if output is None:
-        suffix = {
-            OutputFormat.midi: ".mid",
-            OutputFormat.json: ".json",
-            OutputFormat.jsonl: ".jsonl",
-        }[format]
-        output = audio_file.with_suffix(suffix)
+    suffix = {
+        OutputFormat.midi: ".mid",
+        OutputFormat.json: ".json",
+        OutputFormat.jsonl: ".jsonl",
+    }[format]
+    if output is not None:
+        outputs = [output]
+    elif output_dir is not None:
+        outputs = [output_dir / f.with_suffix(suffix).name for f in audio_files]
+    else:
+        outputs = [f.with_suffix(suffix) for f in audio_files]
+    duplicates = sorted({str(o) for o in outputs if outputs.count(o) > 1})
+    if duplicates:
+        typer.echo(
+            f"Error: several inputs would write to {', '.join(duplicates)}", err=True
+        )
+        raise typer.Exit(1)
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     _device = None if device == "auto" else device
 
@@ -154,10 +191,7 @@ def transcribe(
         device=_device,
     )
 
-    typer.echo(f"Transcribing {audio_file} …", err=True)
-
     kwargs = dict(
-        audio=audio_file,
         use_sampling=sampling,
         temperature=temperature,
         cfg_coef=cfg_coef,
@@ -165,6 +199,16 @@ def transcribe(
         batch_size=batch_size,
         no_eos_is_ok=no_eos_is_ok,
     )
+
+    if len(audio_files) > 1:
+        typer.echo(f"Transcribing {len(audio_files)} files …", err=True)
+        for i, events in model.transcribe_batch(audio_files, **kwargs):
+            _write_events(model, events, outputs[i], format, notes)
+        return
+
+    typer.echo(f"Transcribing {audio_files[0]} …", err=True)
+    kwargs["audio"] = audio_files[0]
+    output = outputs[0]
 
     if format == OutputFormat.midi:
         midi_bytes = model.transcribe_to_midi(**kwargs)
@@ -210,6 +254,26 @@ def transcribe(
         if notes:
             for e in events:
                 typer.echo(str(e), err=True)
+
+
+def _write_events(
+    model: TranscriptionModel,
+    events: list[NoteStartEvent | NoteEndEvent],
+    output: Path,
+    format: OutputFormat,
+    notes: bool,
+) -> None:
+    """Write one input's events from `transcribe_batch` to `output`."""
+    if format == OutputFormat.midi:
+        output.write_bytes(model.events_to_midi(events))
+    elif format == OutputFormat.jsonl:
+        output.write_text("".join(json.dumps(_event_to_dict(e)) + "\n" for e in events))
+    else:  # json
+        output.write_text(json.dumps([_event_to_dict(e) for e in events], indent=2))
+    typer.echo(f"Saved {format.value.upper()} to {output}", err=True)
+    if notes:
+        for e in events:
+            typer.echo(str(e), err=True)
 
 
 @app.command()
