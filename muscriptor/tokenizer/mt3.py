@@ -185,6 +185,49 @@ MT3_FULL_PLUS_GROUP_NAMES: dict[str, int] = {
 }
 
 
+# Names of the other groups of the instrument_group condition (muscriptor.tokenizer.v2.PREFIX_GROUPS: after the 36
+# MT3_FULL_PLUS groups come singletons for drums, program 129 (group 37, unnamed) and the General MIDI programs outside
+# MT3_FULL_PLUS).
+EXTRA_GROUP_NAMES: dict[str, int] = {
+    "drums": 36,
+    "fx_rain": 38,
+    "fx_soundtrack": 39,
+    "fx_crystal": 40,
+    "fx_atmosphere": 41,
+    "fx_echoes": 42,
+    "fx_sci_fi": 43,
+    "sitar": 44,
+    "banjo": 45,
+    "shamisen": 46,
+    "koto": 47,
+    "kalimba": 48,
+    "bagpipe": 49,
+    "fiddle": 50,
+    "shanai": 51,
+    "tinkle_bell": 52,
+    "agogo": 53,
+    "steel_drums": 54,
+    "woodblock": 55,
+    "taiko_drum": 56,
+    "melodic_tom": 57,
+    "synth_drum": 58,
+    "reverse_cymbal": 59,
+    "guitar_fret_noise": 60,
+    "breath_noise": 61,
+    "seashore": 62,
+    "bird_tweet": 63,
+    "telephone_ring": 64,
+    "helicopter": 65,
+    "applause": 66,
+    "gunshot": 67,
+}
+# Every name accepted by --instruments: group name -> group id of the instrument_group condition.
+INSTRUMENT_GROUP_NAMES: dict[str, int] = {
+    **MT3_FULL_PLUS_GROUP_NAMES,
+    **EXTRA_GROUP_NAMES,
+}
+
+
 def group_program_map_to_amt_vocab_dict(instrument_group_to_program_map):
     midi_instrument_names = [
         "Acoustic Grand Piano",

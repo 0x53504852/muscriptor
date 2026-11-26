@@ -109,3 +109,117 @@ def load_audio(path: str | Path, target_sr: int = 16000) -> torch.Tensor:
     if sr != target_sr:
         wav = resample(wav, sr, target_sr)
     return wav
+
+
+# ---------------------------------------------------------------------------
+# MuScriptor V2 reading (the training repository's amt/audio.py timeline)
+# ---------------------------------------------------------------------------
+
+AUDIO_EXTENSIONS = (
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".webm",
+    ".aif",
+    ".aiff",
+)
+
+
+def _ffmpeg_binary() -> str | None:
+    import os
+    import shutil
+
+    return os.environ.get("MUSCRIPTOR_FFMPEG") or shutil.which("ffmpeg")
+
+
+def _decode_ffmpeg(path: str) -> tuple[torch.Tensor, int]:
+    """Full decode with the ffmpeg CLI at the file's own rate: float32 [channels, samples], sample rate."""
+    import json
+    import subprocess
+
+    ffmpeg = _ffmpeg_binary()
+    if ffmpeg is None:
+        raise FileNotFoundError(
+            f"cannot read {path}: install ffmpeg (or put it in MUSCRIPTOR_FFMPEG), or convert the file to WAV"
+        )
+    ffprobe = str(Path(ffmpeg).with_name("ffprobe"))
+    info = json.loads(
+        subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=sample_rate,channels",
+                "-of",
+                "json",
+                path,
+            ],
+            capture_output=True,
+            check=True,
+        ).stdout
+    )["streams"][0]
+    sr, channels = int(info["sample_rate"]), int(info["channels"])
+    out = subprocess.run(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-v",
+            "error",
+            "-i",
+            path,
+            "-map",
+            "0:a:0",
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "-ac",
+            str(channels),
+            "-ar",
+            str(sr),
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
+    wav = np.frombuffer(out, dtype=np.float32).reshape(-1, channels).T
+    return torch.from_numpy(wav.copy()), sr
+
+
+def load_audio_v2(path: str | Path, target_sr: int = 16000) -> torch.Tensor:
+    """Mono float32 [1, T] at target_sr, read as the V2 training code reads audio (amt/audio.py load_audio):
+    WAV / FLAC / OGG sample-exact (stdlib wave for PCM WAV, else soundfile), other containers (mp3, m4a, opus, ...) by a
+    full ffmpeg decode, clamped to [-1, 1] (the timeline the V2 labels follow); channel mean; julius-style sinc resampling
+    (muscriptor.utils.resample.resample_frac)."""
+    from muscriptor.utils.resample import resample_frac
+
+    filepath = Path(path)
+    suffix = filepath.suffix.lower()
+    clamp = False
+    wav = None
+    if suffix == ".wav":
+        try:
+            wav, sr = _read_wav_file(str(filepath))
+        except (wave.Error, ValueError, EOFError):
+            wav = None  # float or extensible WAV: soundfile / ffmpeg below
+    if wav is None and suffix in (".wav", ".flac", ".ogg"):
+        try:
+            wav, sr = _read_non_wav_file(str(filepath))
+        except ImportError:
+            wav = None
+    if wav is None:
+        wav, sr = _decode_ffmpeg(str(filepath))
+        clamp = True
+    mono = wav.mean(dim=0)
+    if sr != target_sr:
+        mono = resample_frac(mono, sr, target_sr)
+    if clamp:
+        mono = mono.clamp(-1, 1)
+    return mono[None]

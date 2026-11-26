@@ -3,6 +3,7 @@
 Adapted from audiocraft/models/lm.py.
 """
 
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -175,6 +176,20 @@ class LMModel(nn.Module):
         self.linears = nn.ModuleList(
             [nn.Linear(dim, card, bias=False) for _ in range(n_q)]
         )
+        # Tokenizer id of each output class: the identity, or tokenizer.v2.COMPACT_IDS for the compact-vocabulary
+        # (MuScriptor V2) models. generate() works on classes; callers map them with `classes_to_tokens`.
+        self.register_buffer(
+            "token_of_class", torch.arange(card, device=device), persistent=False
+        )
+        # Run the condition provider under `autocast` too (the V2 training code does: the mel projection then runs in
+        # bf16). Off for the older models, whose reference outputs were made without it.
+        self.autocast_conditions = False
+        # Print the per-batch timing lines.
+        self.verbose = True
+
+    def classes_to_tokens(self, classes: torch.Tensor) -> torch.Tensor:
+        """Output classes (generate()'s result) -> tokenizer ids."""
+        return self.token_of_class[classes]
 
     # ------------------------------------------------------------------
     # Token ID properties
@@ -325,37 +340,43 @@ class LMModel(nn.Module):
         cfg_coef = self.cfg_coef if cfg_coef is None else cfg_coef
 
         # Build condition tensors (with null conditions appended for CFG)
+        log = print if self.verbose else (lambda *a, **k: None)
+        cond_ctx = (
+            self.autocast if self.autocast_conditions else contextlib.nullcontext()
+        )
         if conditions:
             if cfg_coef == 1.0:
                 prepared = self.condition_provider.tokenize(conditions)
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 _t = time.perf_counter()
-                cfg_conditions: ConditionTensors = self.condition_provider(prepared)
+                with cond_ctx:
+                    cfg_conditions: ConditionTensors = self.condition_provider(prepared)
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
-                print(
+                log(
                     f"[muscriptor] encode conditions (total): {time.perf_counter() - _t:.3f}s"
                 )
             else:
                 null_conditions = nullify_all_conditions(conditions)
                 all_conditions = conditions + null_conditions
                 prepared = self.condition_provider.tokenize(all_conditions)
-                print(
+                log(
                     "[muscriptor] instrument_group tokens:",
                     prepared.get("instrument_group"),
                 )
-                print(
+                log(
                     "[muscriptor] dataset_name tokens:    ",
                     prepared.get("dataset_name"),
                 )
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 _t = time.perf_counter()
-                cfg_conditions = self.condition_provider(prepared)
+                with cond_ctx:
+                    cfg_conditions = self.condition_provider(prepared)
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
-                print(
+                log(
                     f"[muscriptor] encode conditions (total): {time.perf_counter() - _t:.3f}s"
                 )
         else:

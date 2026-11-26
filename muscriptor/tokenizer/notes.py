@@ -20,6 +20,7 @@ class Note:
     onset: float  # onset time in seconds
     offset: float  # offset time in seconds (== onset for drums)
     pitch: int  # MIDI note number (0-127)
+    velocity: int = 1  # 1: an onset (the tokenizer has no loudness); used by the V2 decoder's sort keys
 
 
 @dataclass

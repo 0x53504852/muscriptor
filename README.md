@@ -151,7 +151,36 @@ class TranscriptionModel:
 muscriptor transcribe audio.wav -o out.mid
 # several files, batched together; outputs next to each input or in --output-dir
 muscriptor transcribe a.wav b.wav c.wav --batch-size 32 --output-dir midi/
+# a folder, outputs in a directory (trailing '/')
+muscriptor transcribe songs/ -o midi/
 ```
+
+## MuScriptor V2 weights, ensemble decoding
+
+`TranscriptionModel.load_model` also reads the MuScriptor V2 exports of the training repository (`emb.weight` /
+`linear.weight` keys, compact 830-class vocabulary). With them the package decodes as the V2 training code does:
+
+- bf16;
+- 5 s windows every 4 s, each window owning its central region;
+- cfg 1.0;
+- sorted instrument prompt;
+- drums written as General MIDI notes.
+
+The 13-decode consensus vote (recipes A / B) runs in one batched pass:
+
+```bash
+muscriptor transcribe --model model.safetensors --ensemble auto --instruments electric_bass,drums,voice songs/ -o midi/ --save-notes csv
+```
+
+```python
+for i, notes in model.transcribe_notes(paths, instruments=["electric_bass", "drums"], ensemble="auto"):
+    Path(paths[i]).with_suffix(".mid").write_bytes(model.notes_to_midi(notes))
+```
+
+The user guide is [docs/V2_BEST_MODEL.md](docs/V2_BEST_MODEL.md).
+
+`--ensemble` and `--overlap-hop` also work with the released weights. Without them, and with the released weights,
+nothing changes.
 
 ## Web UI
 

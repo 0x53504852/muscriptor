@@ -140,6 +140,7 @@ class MelSpectrogramConditioner(nn.Module):
             assert sample_rate % fine_frame_rate == 0
             self.hop_length = sample_rate // fine_frame_rate
 
+        self.verbose = True  # print the per-batch mel timing
         self.mel_spec_transform = _MelSpectrogram(
             sample_rate=sample_rate,
             n_fft=n_fft,
@@ -163,8 +164,9 @@ class MelSpectrogramConditioner(nn.Module):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         t0 = time.perf_counter()
-        with torch.no_grad():
-            wav = x.wav
+        # float32 even under autocast (the V2 models run their conditions under bf16 autocast, mel excluded)
+        with torch.no_grad(), torch.autocast(x.wav.device.type, enabled=False):
+            wav = x.wav.float()
             if self.normalize_audio:
                 wav = wav / (wav.abs().max(dim=-1, keepdim=True).values + 1e-8)
             mel = self.mel_spec_transform(wav)
@@ -175,12 +177,13 @@ class MelSpectrogramConditioner(nn.Module):
                 )
             if self.log_scale:
                 mel = torch.log(mel + self.eps)
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and self.verbose:
             torch.cuda.synchronize()
-        print(
-            f"[muscriptor] mel-spec ({wav.shape[0]} × {wav.shape[-1]} samples): "
-            f"{time.perf_counter() - t0:.3f}s"
-        )
+        if self.verbose:
+            print(
+                f"[muscriptor] mel-spec ({wav.shape[0]} × {wav.shape[-1]} samples): "
+                f"{time.perf_counter() - t0:.3f}s"
+            )
         return mel
 
     def forward(self, x: WavCondition) -> ConditionType:
