@@ -7,8 +7,11 @@ single decode (fast) or the 13-decode consensus vote (more accurate).
 
 MuScriptor transcribes mixed audio (a full band, a choir, a piano, ...) into notes: pitch, onset, offset and
 instrument, drums included. It is a 24-layer decoder-only transformer (medium size, ~300M parameters). It reads
-5 s log-mel windows of mono 16 kHz audio and writes MT3-style note tokens. The V2 "best" checkpoint
-(`muscriptor_v2_remix_rl_20261126`, step 5000) was trained on the MuScriptor V2 dataset, then fine-tuned with RL.
+5 s log-mel windows of mono 16 kHz audio and writes MT3-style note tokens. The current V2 "best" checkpoint
+(`muscriptor_v2_rl_op73_20261126`, step 3000; 26 Nov 2026) is one 60k-step supervised run on the cleaned MuScriptor V2
+dataset (choir and M4Singer timing fixes, test-piece hold-outs, cross-song stem remix augmentation from the start),
+then 3k RL steps. With the 13-decode vote it is our most well-rounded model (notably better on chamber music and
+choir than the previous best).
 
 There are two ways to decode:
 
@@ -21,11 +24,14 @@ There are two ways to decode:
 ## Weights
 
 ```
-/lustre/scwpod02/client/kyutai/music/models/muscriptor_v2_best_20261126/model.safetensors
+/lustre/scwpod02/client/kyutai/music/models/muscriptor_v2_sota_20261126_clean/model.safetensors
 ```
 
 This is the training repository's export, used as is (1.2 GB, float32). The package reads the model size and the
 compact vocabulary from the weights. You do not need any conversion.
+
+The previous best checkpoint (`muscriptor_v2_remix_rl_20261126`, step 5000) stays available at
+`/lustre/scwpod02/client/kyutai/music/models/muscriptor_v2_best_20261126/model.safetensors`; the same commands work with it.
 
 ## Installation (uv)
 
@@ -47,7 +53,7 @@ uv run muscriptor list-instruments
 Use a GPU node. The examples below set `MODEL` to the weights:
 
 ```bash
-MODEL=/lustre/scwpod02/client/kyutai/music/models/muscriptor_v2_best_20261126/model.safetensors
+MODEL=/lustre/scwpod02/client/kyutai/music/models/muscriptor_v2_sota_20261126_clean/model.safetensors
 ```
 
 A SLURM job for a folder of songs (partition `kyutai`, 1 GPU), saved as `transcribe.sbatch`:
@@ -61,7 +67,7 @@ A SLURM job for a folder of songs (partition `kyutai`, 1 GPU), saved as `transcr
 #SBATCH --mem=64G
 #SBATCH --time=4:00:00
 #SBATCH --output=muscriptor-%j.out
-MODEL=/lustre/scwpod02/client/kyutai/music/models/muscriptor_v2_best_20261126/model.safetensors
+MODEL=/lustre/scwpod02/client/kyutai/music/models/muscriptor_v2_sota_20261126_clean/model.safetensors
 cd ~/muscriptor
 uv run muscriptor transcribe --model $MODEL --ensemble auto \
     --instruments electric_bass,distorted_electric_guitar,drums,voice \
